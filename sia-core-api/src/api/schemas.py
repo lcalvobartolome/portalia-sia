@@ -25,7 +25,7 @@ Author: Lorena Calvo-Bartolomé
 Date: 04/02/2026
 """
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Literal, Optional
 from pydantic import BaseModel, Field
 from enum import Enum
 
@@ -822,10 +822,12 @@ class TopicModelTrainingRequest(BaseModel):
 # ======================================================
 class CorpusIndexRequest(BaseModel):
     """Request for indexing a corpus into Solr."""
-    corpus_name: str = Field(..., description="Name of the corpus to index (without extension)", min_length=1)
+    corpus_name: Literal["ted", "place", "bdns"] = Field(
+        ..., description="Name of the corpus to index"
+    )
 
     class Config:
-        json_schema_extra = {"example": {"corpus_name": "procurement_2024"}}
+        json_schema_extra = {"example": {"corpus_name": "ted"}}
         
 class CollectionCreateRequest(BaseModel):
     """Request body for creating a collection."""

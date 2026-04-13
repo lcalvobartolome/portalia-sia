@@ -1,6 +1,9 @@
 services:
   sia-core-api:
-    build: ./sia-core-api
+    build:
+      context: ./sia-core-api
+      args:
+        GITHUB_TOKEN: ${GITHUB_TOKEN}
     container_name: sia-core-api
     ports:
       - 10083:10083
@@ -16,7 +19,7 @@ services:
       #networks:
       #  - np-net
     volumes:
-      - ../data:/data
+      - /export/data_ml4ds/alia/place/:/data/source
       - ./sia-config:/config
     deploy:
       resources:

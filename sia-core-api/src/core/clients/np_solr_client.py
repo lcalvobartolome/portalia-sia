@@ -29,7 +29,7 @@ class SIASolrClient(SolrClient):
         # Read configuration from config file
         cf = configparser.ConfigParser()
         cf.read(config_file)
-        self.solr_config = "np_config"
+        self.solr_config = "sia_config"
         self.batch_size = int(cf.get('restapi', 'batch_size'))
         self.corpus_col = cf.get('restapi', 'corpus_col')
         self.no_meta_fields = cf.get('restapi', 'no_meta_fields').split(",")
@@ -53,7 +53,7 @@ class SIASolrClient(SolrClient):
 
     def index_corpus(
         self,
-        corpus_raw: str
+        corpus_name: str
     ) -> None:
         """
         This method takes the name of a corpus raw file as input. It creates a Solr collection with the stem name of the file, which is obtained by converting the file name to lowercase (for example, if the input is 'Cordis', the stem would be 'cordis'). However, this process occurs only if the directory structure (self.path_source / corpus_raw / parquet) exists.
@@ -68,22 +68,25 @@ class SIASolrClient(SolrClient):
         """
 
         # 1. Get full path and stem of the logical corpus
-        corpus_to_index = self.path_source / (corpus_raw + ".parquet")
-        corpus_logical_name = corpus_to_index.stem.lower()
+        #/mnt/data/2025_26
+        #DATA_DIR="${BASE_DIR}/metadata/${TIPO}translate"
+        #MODEL_DIR="${BASE_DIR}/metadata/${TIPO}/model"
+        #METADATA_PARQUET="${BASE_DIR}/${TIPO}_2526.parquet"
+        #corpus_to_index = self.path_source / (corpus_raw + ".parquet")
         
-        self.logger.info(f"Corpus to index: {corpus_to_index}")
-        self.logger.info(f"Corpus logical name: {corpus_logical_name}")
+            
+        self.logger.info(f"Corpus to index: {corpus_name}")
 
         # 2. Create collection
         corpus, err = self.create_collection(
-            col_name=corpus_logical_name, config=self.solr_config)
+            col_name=corpus_name, config=self.solr_config)
         if err == 409:
             self.logger.info(
-                f"-- -- Collection {corpus_logical_name} already exists.")
+                f"-- -- Collection {corpus_name} already exists.")
             return
         else:
             self.logger.info(
-                f"-- -- Collection {corpus_logical_name} successfully created.")
+                f"-- -- Collection {corpus_name} successfully created.")
 
         # 3. Add corpus collection to self.corpus_col. If Corpora has not been created already, create it
         corpus, err = self.create_collection(
@@ -112,36 +115,36 @@ class SIASolrClient(SolrClient):
             corpus_id = 1
 
         # 4. Create Corpus object and extract info from the corpus to index
-        corpus = Corpus(corpus_to_index)
+        corpus = Corpus(corpus_name)
         corpus_col_upt = corpus.get_corpora_update(id=corpus_id)
         self.logger.info(f"-- -- corpus_col_upt extracted")
         self.logger.info(f"{corpus_col_upt}")
 
         # 5. Index corpus and its fields in CORPUS_COL
         self.logger.info(
-            f"-- -- Indexing of {corpus_logical_name} info in {self.corpus_col} starts.")
+            f"-- -- Indexing of {corpus_name} info in {self.corpus_col} starts.")
         self.index_documents(corpus_col_upt, self.corpus_col, self.batch_size)
         self.logger.info(
-            f"-- -- Indexing of {corpus_logical_name} info in {self.corpus_col} completed.")
+            f"-- -- Indexing of {corpus_name} info in {self.corpus_col} completed.")
         
         self.logger.info(f"this is the corpus_col_upt: {corpus_col_upt}")
 
         # 6. Index documents in corpus collection
         self.logger.info(
-            f"-- -- Indexing of {corpus_logical_name} in {corpus_logical_name} starts.")
+            f"-- -- Indexing of {corpus_name} in {corpus_name} starts.")
         batch = []
-        for doc in corpus.get_docs_raw_info():
+        for doc in corpus.get_docs_metadata():
             batch.append(doc)
             
             if len(batch) >= self.batch_size:
                 
-                self.index_documents(batch, corpus_logical_name, self.batch_size)
+                self.index_documents(batch, corpus_name, self.batch_size)
                 batch = []  # Clear batch to free memory
 
         # Index remaining documents
         if batch:
-            self.index_documents(batch, corpus_logical_name, self.batch_size)
-        self.logger.info(f"-- -- Indexing of {corpus_logical_name} info in {corpus_logical_name} completed.")
+            self.index_documents(batch, corpus_name, self.batch_size)
+        self.logger.info(f"-- -- Indexing of {corpus_name} info in {corpus_name} completed.")
 
 
         return

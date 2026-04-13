@@ -38,27 +38,6 @@ default_bert=all-MiniLM-L6-v2
 max_sequence_length=384
 
 # There will be one of this for each corpus avaialable
-[np_all-config]
-id_field=identifier
-title_field=title
-date_field=date
-MetadataDisplayed=identifier,title
-SearcheableField=identifier,title
-
-[place_all-config]
-id_field=identifier
-title_field=title
-date_field=date
-MetadataDisplayed=identifier,title,link,place_id
-SearcheableField=identifier,title
-
-[place_all_embeddings_metadata-config]
-id_field=place_id
-title_field=title
-date_field=date
-MetadataDisplayed=id,title,link
-SearcheableField=id,title
-
 [sample-config]
 id_field=place_id
 title_field=title
@@ -66,16 +45,9 @@ date_field=date
 MetadataDisplayed=id,title,link
 SearcheableField=id,title
 
-[place_all_embeddings_metadata_only_augmented-config]
-id_field=place_id
+[place-config]
+id_field=id
 title_field=title
-date_field=date
-MetadataDisplayed=id,objective,link
-SearcheableField=id,objective
-
-[combined_data_with_cpv_metadata_lemmas-config]
-id_field=place_id
-title_field=title
-date_field=date
-MetadataDisplayed=id,generated_objective,link
-SearcheableField=id,generated_objective
+date_field=updated
+MetadataDisplayed=id,title,link
+SearcheableField=id,title

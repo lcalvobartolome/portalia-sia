@@ -1,3 +1,11 @@
+[logformat]
+filename = msgs.log
+datefmt = %%Y-%%d-%%m %%H:%%M:%%S
+file_format= %%(asctime)s | %%(levelname)-8s | %%(message)s
+file_level = INFO
+cons_level = DEBUG
+cons_format = %%(levelname)-8s | %%(message)s
+
 [restapi]
 batch_size = 100
 corpus_col = corpus
@@ -9,4 +17,9 @@ betas_max_sum = 100
 searchable_fields = title,content,description
 date_field = date
 
-path_data = loquesea
+[place-config]
+id_field=id
+title_field=title
+date_field=updated
+MetadataDisplayed=id,title,link
+SearcheableField=id,title
