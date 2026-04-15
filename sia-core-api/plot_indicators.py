@@ -50,13 +50,13 @@ def _tr_list(labels):
 # ---------------------------------------------------------------------------
 # Figure / font settings
 # ---------------------------------------------------------------------------
-FONT_SIZE   = 20
-TITLE_SIZE  = 21
-LEGEND_SIZE = 18
-TICK_SIZE   = 17
+FONT_SIZE   = 22
+TITLE_SIZE  = 23
+LEGEND_SIZE = 20
+TICK_SIZE   = 19
 DPI         = 300
 FIG_W       = 11   # inches – single panel
-FIG_H       = 6
+FIG_H       = 7
 
 _COLORS = ["#86d8df", "#d8a2a0", "#b8dba0"]
 
@@ -117,7 +117,8 @@ def _grouped_bars(ax, labels_en, series: dict, pct=False):
     for idx, (name, vals) in enumerate(series.items()):
         safe = [v if v is not None else 0.0 for v in vals]
         bars = ax.bar(x + offsets[idx], safe, width,
-                      label=name, color=_COLORS[idx % len(_COLORS)], alpha=0.85)
+                      label=name, color=_COLORS[idx % len(_COLORS)], alpha=0.85,
+                      edgecolor="black", linewidth=2.2)
         handles.append(bars)
     ax.set_xticks(x)
     if pct:
@@ -134,7 +135,6 @@ def _save(fig, path):
 # ---------------------------------------------------------------------------
 # One function per indicator
 # ---------------------------------------------------------------------------
-
 def plot_ind0(data_by_src, out_dir):
     """Indicator 0 – two sub-plots: tender count and aggregated budget."""
     fig, axes = plt.subplots(1, 2, figsize=(FIG_W * 2, FIG_H))
@@ -242,7 +242,6 @@ def _plot_single(data, key_val, ylabel, title, out_path,
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
-
 def fetch_and_plot(args):
     base    = args.base_url
     ds      = args.date_start
@@ -317,9 +316,11 @@ def fetch_and_plot(args):
     )
 
     # I6
-    _plot_single(
-        d_speed, "avg_days", "Days",
-        "Ind. 6 – Decision speed (insiders, open procedures)",
+    _plot_dual(
+        d_speed, "avg_days", "coverage",
+        "Days", "Coverage (%)",
+        "Ind. 6a – Decision speed (insiders, open procedures)",
+        "Ind. 6b – Coverage of decision speed field",
         os.path.join(out_dir, "indicador6.png"),
         pct=False, multi_src=False,
     )
@@ -354,19 +355,21 @@ def fetch_and_plot(args):
     )
 
     # I11
-    _plot_single(
-        None, "pct_missing", "% lots",
-        "Ind. 11 – Missing supplier ID (% awarded lots)",
-        os.path.join(out_dir, "indicador11.png"),
-        pct=True, multi_src=True, data_by_src=d_miss_sup,
+    _plot_dual(
+        d_miss_sup, "pct_missing", "coverage",
+        "% lots", "Coverage (%)",
+        "Ind. 11a – Missing supplier ID (% awarded lots)",
+        "Ind. 11b – Coverage of supplier ID field",
+        os.path.join(out_dir, "indicador11.png"), pct=True,
     )
 
     # I12
-    _plot_single(
-        None, "pct_missing", "% procedures",
-        "Ind. 12 – Missing buyer ID (% procedures w/o buyer identifier)",
-        os.path.join(out_dir, "indicador12.png"),
-        pct=True, multi_src=True, data_by_src=d_miss_buy,
+    _plot_dual(
+        d_miss_buy, "pct_missing", "coverage",
+        "% procedures", "Coverage (%)",
+        "Ind. 12a – Missing buyer ID (% procedures w/o buyer identifier)",
+        "Ind. 12b – Coverage of buyer ID field",
+        os.path.join(out_dir, "indicador12.png"), pct=True,
     )
 
     print("\nAll figures saved.")

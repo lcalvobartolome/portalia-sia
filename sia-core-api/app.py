@@ -24,7 +24,7 @@ from src.api.routers.admin import router as admin_router
 from src.api.routers.processing import router as processing_router
 from src.api.routers.services import router as exploitation_router
 from src.api.schemas import HealthResponse
-from src.core.clients.np_solr_client import SIASolrClient
+from src.core.clients.sia_solr_client import SIASolrClient
 from src.api.auth import verify_api_key, API_KEY_HEADER_NAME
 
 

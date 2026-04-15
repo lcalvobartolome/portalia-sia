@@ -20,7 +20,6 @@ from src.core.entities.model import Model
 from src.core.entities.queries import Queries
 
 _PLACE_COL = "place"
-_DATE_FMT  = "%Y-%m-%dT%H:%M:%SZ"
 
 def _safe(val):
     """Return None instead of NaN / Inf, and round to 4 decimal places."""
@@ -158,17 +157,9 @@ class SIASolrClient(SolrClient):
 
         """
 
-        # 1. Get full path and stem of the logical corpus
-        #/mnt/data/2025_26
-        #DATA_DIR="${BASE_DIR}/metadata/${TIPO}translate"
-        #MODEL_DIR="${BASE_DIR}/metadata/${TIPO}/model"
-        #METADATA_PARQUET="${BASE_DIR}/${TIPO}_2526.parquet"
-        #corpus_to_index = self.path_source / (corpus_raw + ".parquet")
-        
-            
         self.logger.info(f"Corpus to index: {corpus_name}")
 
-        # 2. Create collection
+        # 1. Create collection
         corpus, err = self.create_collection(
             col_name=corpus_name, config=self.solr_config)
         if err == 409:
@@ -179,7 +170,7 @@ class SIASolrClient(SolrClient):
             self.logger.info(
                 f"-- -- Collection {corpus_name} successfully created.")
 
-        # 3. Add corpus collection to self.corpus_col. If Corpora has not been created already, create it
+        # 2. Add corpus collection to self.corpus_col. If Corpora has not been created already, create it
         corpus, err = self.create_collection(
             col_name=self.corpus_col, config=self.solr_config)
         self.logger.info(f"-- -- Collection {self.corpus_col} successfully created.")
@@ -187,7 +178,7 @@ class SIASolrClient(SolrClient):
             self.logger.info(
                 f"-- -- Collection {self.corpus_col} already exists.")
 
-            # 3.1. Do query to retrieve last id in self.corpus_col
+            # 2.1. Do query to retrieve last id in self.corpus_col
             # http://localhost:8983/solr/#/{self.corpus_col}/query?q=*:*&q.op=OR&indent=true&sort=id desc&fl=id&rows=1&useParams=
             sc, results = self.execute_query(q='*:*',
                                              col_name=self.corpus_col,
@@ -205,13 +196,13 @@ class SIASolrClient(SolrClient):
                 f"Collection {self.corpus_col} successfully created.")
             corpus_id = 1
 
-        # 4. Create Corpus object and extract info from the corpus to index
+        # 3. Create Corpus object and extract info from the corpus to index
         corpus = Corpus(corpus_name)
         corpus_col_upt = corpus.get_corpora_update(id=corpus_id)
         self.logger.info(f"-- -- corpus_col_upt extracted")
         self.logger.info(f"{corpus_col_upt}")
 
-        # 5. Index corpus and its fields in CORPUS_COL
+        # 4. Index corpus and its fields in CORPUS_COL
         self.logger.info(
             f"-- -- Indexing of {corpus_name} info in {self.corpus_col} starts.")
         self.index_documents(corpus_col_upt, self.corpus_col, self.batch_size)
@@ -220,7 +211,7 @@ class SIASolrClient(SolrClient):
         
         self.logger.info(f"this is the corpus_col_upt: {corpus_col_upt}")
 
-        # 6. Index documents in corpus collection
+        # 5. Index documents in corpus collection
         self.logger.info(
             f"-- -- Indexing of {corpus_name} in {corpus_name} starts.")
         batch = []
@@ -2212,6 +2203,7 @@ class SIASolrClient(SolrClient):
             "id":              "decision_speed",
             "bimester_labels": ["Ene–Feb 2025", ...],
             "avg_days":        [32.1, 28.4, ...],
+            "coverage":        [85.0, 87.3, ...],  # % procedures with both date fields present
             "n_obs":           [1200, 980, ...],  # docs with both dates present
         }
         """
@@ -2232,18 +2224,19 @@ class SIASolrClient(SolrClient):
     
         labels:   List = []
         avg_days: List = []
+        cov_list: List = []
         n_obs:    List = []
         last_sc = 200
-    
+
         for q in queries:
             label = q.pop("label")
             q.pop("_meta")
             params = {k: v for k, v in q.items() if k != "q"}
-    
+
             self.logger.info(
                 f"do_Q42 | bim={label} | tender_type={tender_type}"
             )
-    
+
             sc, results = self.execute_query(
                 q=q["q"], col_name=_PLACE_COL, **params
             )
@@ -2254,9 +2247,12 @@ class SIASolrClient(SolrClient):
                 last_sc = sc
                 labels.append(label)
                 avg_days.append(None)
+                cov_list.append(None)
                 n_obs.append(0)
                 continue
-    
+
+            n_total_docs   = len(results.docs)
+            n_with_dates   = 0
             deltas: List[float] = []
             for doc in results.docs:
                 # plazo_presentacion is a plain ISO string (one per tender);
@@ -2264,33 +2260,39 @@ class SIASolrClient(SolrClient):
                 # We pair the single deadline with every award date.
                 raw_deadline = doc.get(deadline_field)
                 raw_awards   = doc.get(award_field)
- 
+
                 if not raw_deadline or not raw_awards:
                     continue
- 
+
+                n_with_dates += 1
+
                 # Normalise deadline to a single string
                 if isinstance(raw_deadline, list):
                     deadline_str = _parse_date_field(raw_deadline)[0] if raw_deadline else None
                 else:
                     deadline_str = raw_deadline
- 
+
                 if not deadline_str:
                     continue
- 
+
                 # Parse every award date and diff against the shared deadline
                 for award_str in _parse_date_field(raw_awards):
                     delta = _date_diff_days(deadline_str, award_str)
                     if delta is not None and 0 <= delta <= 365:
                         deltas.append(delta)
-    
+
             labels.append(label)
             avg_days.append(_safe(sum(deltas) / len(deltas)) if deltas else None)
+            cov_list.append(
+                _safe(n_with_dates / n_total_docs * 100) if n_total_docs > 0 else None
+            )
             n_obs.append(len(deltas))
-    
+
         result = {
             "id":              "decision_speed",
             "bimester_labels": labels,
             "avg_days":        avg_days,
+            "coverage":        cov_list,
             "n_obs":           n_obs,
         }
         return result, last_sc
@@ -2846,6 +2848,7 @@ class SIASolrClient(SolrClient):
             "id":              "missing_supplier_id",
             "bimester_labels": ["Ene–Feb 2025", ...],
             "pct_missing":     [6.2, 5.8, ...],   # % lots without supplier id
+            "coverage":        [78.3, 80.1, ...],  # % procedures with identifier field present
             "n_lots_total":    [4200, 5100, ...],
         }
         """
@@ -2866,23 +2869,26 @@ class SIASolrClient(SolrClient):
  
         labels:   List = []
         pct_list: List = []
+        cov_list: List = []
         n_list:   List = []
         last_sc = 200
- 
+
         for q in queries:
             label = q.pop("label")
             q.pop("_meta")
             params = {k: v for k, v in q.items() if k != "q"}
- 
+
             self.logger.info(f"do_Q48 | bim={label} | tender_type={tender_type}")
- 
+
             sc, results = self.execute_query(q=q["q"], col_name=_PLACE_COL, **params)
             if sc != 200:
                 self.logger.error(f"do_Q48: Solr returned {sc} for bimester '{label}'")
                 last_sc = sc
-                labels.append(label); pct_list.append(None); n_list.append(None)
+                labels.append(label); pct_list.append(None); cov_list.append(None); n_list.append(None)
                 continue
- 
+
+            n_docs_total = len(results.docs)
+            n_docs_with_field = 0
             total = missing = 0
             for doc in results.docs:
                 raw = doc.get(identifier_field)
@@ -2890,6 +2896,7 @@ class SIASolrClient(SolrClient):
                 # (not yet awarded); only evaluate docs that have it.
                 if not isinstance(raw, (list, tuple)) or not raw:
                     continue
+                n_docs_with_field += 1
                 for item in raw:
                     total += 1
                     try:
@@ -2902,15 +2909,19 @@ class SIASolrClient(SolrClient):
                             missing += 1
                     except (AttributeError, IndexError):
                         missing += 1
- 
+
             labels.append(label)
             pct_list.append(_safe(missing / total * 100) if total > 0 else None)
+            cov_list.append(
+                _safe(n_docs_with_field / n_docs_total * 100) if n_docs_total > 0 else None
+            )
             n_list.append(total)
- 
+
         result = {
             "id":              "missing_supplier_id",
             "bimester_labels": labels,
             "pct_missing":     pct_list,
+            "coverage":        cov_list,
             "n_lots_total":    n_list,
         }
         return result, last_sc
@@ -2953,6 +2964,7 @@ class SIASolrClient(SolrClient):
             "id":              "missing_buyer_id",
             "bimester_labels": ["Ene–Feb 2025", ...],
             "pct_missing":     [0.0, 0.1, ...],  # % procedures without buyer id
+            "coverage":        [100.0, 99.9, ...],  # % procedures with buyer id field present
             "n_tenders":       [1200, 980, ...],
         }
         """
@@ -2973,38 +2985,43 @@ class SIASolrClient(SolrClient):
  
         labels:   List = []
         pct_list: List = []
+        cov_list: List = []
         n_list:   List = []
         last_sc = 200
- 
+
         for q in queries:
             label = q.pop("label")
             q.pop("_meta")
             params = {k: v for k, v in q.items() if k != "q"}
- 
+
             self.logger.info(f"do_Q49 | bim={label} | tender_type={tender_type}")
- 
+
             sc, results = self.execute_query(q=q["q"], col_name=_PLACE_COL, **params)
             if sc != 200:
                 self.logger.error(f"do_Q49: Solr returned {sc} for bimester '{label}'")
                 last_sc = sc
-                labels.append(label); pct_list.append(None); n_list.append(None)
+                labels.append(label); pct_list.append(None); cov_list.append(None); n_list.append(None)
                 continue
- 
+
             total = missing = 0
             for doc in results.docs:
                 total += 1
                 val = doc.get(buyer_id_field)
                 if val is None or (isinstance(val, str) and not val.strip()):
                     missing += 1
- 
+
             labels.append(label)
             pct_list.append(_safe(missing / total * 100) if total > 0 else None)
+            cov_list.append(
+                _safe((total - missing) / total * 100) if total > 0 else None
+            )
             n_list.append(total)
- 
+
         result = {
             "id":              "missing_buyer_id",
             "bimester_labels": labels,
             "pct_missing":     pct_list,
+            "coverage":        cov_list,
             "n_tenders":       n_list,
         }
         return result, last_sc
