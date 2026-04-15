@@ -1,26 +1,11 @@
 """
-plot_indicators.py
-==================
-Calls all indicator endpoints of the SIA exploitation API and saves one
-high-resolution figure per indicator, named indicador0.png … indicador10.png.
-
-Indicators:
-  indicador0.png  – Total procurement: tender count + aggregated budget (2 bars side by side)
-  indicador1.png  – Single bidder: % single-offer lots + coverage
-  indicador2.png  – Direct awards: % negotiated w/o publication + coverage
-  indicador3.png  – TED publication: % published in TED
-  indicador6.png  – Decision speed (insiders, open procedures)
-  indicador7.png  – SME participation (insiders): % lots + coverage
-  indicador8.png  – SME offer ratio (insiders): % offers + coverage
-  indicador9.png  – Lots division: % multi-lot procedures + coverage
-  indicador11.png – Missing supplier ID: % lots missing identifier
-  indicador12.png – Missing buyer ID: % procedures missing buyer identifier
+Calls all indicator endpoints of the SIA exploitation API and saves one figure per indicator, named indicador0.png ... indicador10.png.
 
 Usage
 -----
     python plot_indicators.py \
         --base-url http://localhost:8000/exploitation \
-        --api-key  YOUR_KEY \
+        --api-key  KEY \
         --date-start 2025-01-01T00:00:00Z \
         --date-end   2026-03-01T00:00:00Z \
         --cpv-prefixes 48 72 73 \
@@ -39,8 +24,14 @@ import matplotlib.ticker as mticker
 import numpy as np
 import requests
 
+plt.rcParams.update({
+    "text.usetex": False,
+    "font.family": "serif",
+    "font.serif":  ["DejaVu Serif"],
+})
+
 # ---------------------------------------------------------------------------
-# Spanish → English bimester label translation
+# Spanish -> English bimester label translation
 # ---------------------------------------------------------------------------
 _ES_TO_EN = {
     "Ene": "Jan", "Feb": "Feb", "Mar": "Mar", "Abr": "Apr",
@@ -138,7 +129,7 @@ def _grouped_bars(ax, labels_en, series: dict, pct=False):
 def _save(fig, path):
     fig.savefig(path, dpi=DPI, bbox_inches="tight")
     plt.close(fig)
-    print(f"  Saved → {path}")
+    print(f"  Saved -> {path}")
 
 # ---------------------------------------------------------------------------
 # One function per indicator

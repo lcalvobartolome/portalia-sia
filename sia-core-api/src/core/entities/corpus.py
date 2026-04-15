@@ -239,11 +239,28 @@ class Corpus(object):
             return None
 
     @staticmethod
+    def _serialize_element(x):
+        """Convert a scalar element to string, formatting dates with parseTimeINSTANT."""
+        if isinstance(x, (pd.Timestamp, datetime)):
+            return parseTimeINSTANT(x)
+        if isinstance(x, str):
+            try:
+                datetime.fromisoformat(x)
+                formatted = parseTimeINSTANT(x)
+                return formatted if formatted != "" else x
+            except ValueError:
+                pass
+        return str(x)
+
+    @staticmethod
     def _parse_list_field(val, serialize_elements=False, sep=None):
         """Parse a field that may come as a string repr of a list or already as a list.
 
         - serialize_elements=True, sep=None  → each sub-element serialized as JSON string
         - serialize_elements=True, sep='|'   → each sub-list joined with sep (no escaping)
+
+        Date-like elements (datetime, pd.Timestamp, or ISO 8601 strings) are formatted
+        with parseTimeINSTANT.
         """
         if isinstance(val, (list, np.ndarray)):
             result = list(val)
@@ -261,8 +278,12 @@ class Corpus(object):
                 return []
         if serialize_elements:
             if sep is not None:
-                return [sep.join(str(x) for x in v) if isinstance(v, list) else str(v) for v in result]
-            return [json.dumps(v, ensure_ascii=False) if isinstance(v, (dict, list)) else str(v) for v in result]
+                return [
+                    sep.join(Corpus._serialize_element(x) for x in v)
+                    if isinstance(v, list) else Corpus._serialize_element(v)
+                    for v in result
+                ]
+            return [json.dumps(v, ensure_ascii=False) if isinstance(v, (dict, list)) else Corpus._serialize_element(v) for v in result]
         return [str(v) for v in result]
 
     def get_docs_metadata(self):

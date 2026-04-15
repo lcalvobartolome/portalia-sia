@@ -36,19 +36,15 @@ def _safe(val):
  
 def _parse_date_flexible(raw: str) -> Optional[datetime]:
     """
-    Parse a date string that may be in any of these formats:
-        "2024-11-28T00:00:00Z"   (full ISO-8601 UTC)
-        "2024-11-28"             (date only, as stored in fecha_acuerdo)
+    Parse a date string in ISO-8601 format (with or without time/timezone).
     Returns a timezone-aware datetime or None on failure.
     """
     if not raw:
         return None
-    for fmt in ("%Y-%m-%dT%H:%M:%SZ", "%Y-%m-%d"):
-        try:
-            return datetime.strptime(raw, fmt).replace(tzinfo=timezone.utc)
-        except ValueError:
-            continue
-    return None
+    try:
+        return datetime.fromisoformat(raw).astimezone(timezone.utc)
+    except ValueError:
+        return None
  
  
 def _date_diff_days(d1: str, d2: str) -> Optional[float]:
@@ -67,25 +63,18 @@ def _date_diff_days(d1: str, d2: str) -> Optional[float]:
 def _parse_date_field(raw) -> List[Optional[str]]:
     """
     Parse a date field stored as a list of "lot_id|date_value" strings,
-    e.g. ["-1|2024-09-14"]. Returns a flat list of date strings or None.
+    e.g. ["-1|2024-09-14"]. Returns a flat list of date strings.
     A plain ISO string (not the lot|date format) is returned as-is.
     """
     if not raw:
         return []
     if isinstance(raw, str):
         return [raw]
-    result: List[Optional[str]] = []
-    for item in raw:
-        try:
-            parts = item.split("|", 1)
-            result.append(parts[1] if len(parts) == 2 else parts[0])
-        except (AttributeError, IndexError):
-            result.append(None)
-    return result
+    return [item.split("|", 1)[1] if "|" in item else item for item in raw if item]
  
 def _parse_lot_offers(raw) -> List[Optional[int]]:
     """
-    Parse the `ofertas_recibidas` field.
+    Parse the ofertas_recibida  field.
  
     Solr stores this field as a list of strings with format "lot_id|n_offers",
     e.g. ["-1|1", "2|3"].  Returns a flat list of int-or-None values,
