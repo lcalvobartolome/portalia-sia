@@ -13,7 +13,7 @@ mallet_path=/np-inferencer/src/core/models/mallet-2.0.8/bin/mallet
 [restapi]
 #Default setting for number of topics
 batch_size=1000
-corpus_col=corpora
+corpus_col=corpus
 date_field=date
 no_meta_fields=raw_text,lemmas,bow,_version_,embeddings
 searchable_fields=id,title,generated_objective,cpv,cpv_predicted,criterios_adjudicacion,criterios_solvencia,condiciones_especiales

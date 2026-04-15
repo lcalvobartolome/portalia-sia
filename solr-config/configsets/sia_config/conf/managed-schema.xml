@@ -129,8 +129,11 @@
 
   <!-- Metadata PLACE  -->
   <field name="tender_type" type="string" indexed="true" stored="true" required="false" multiValued="false" />
+  <field name="id_tecnico" type="string" indexed="true" stored="true" required="false" multiValued="false" />
+  <field name="ted_id" type="string" indexed="true" stored="true" required="false" multiValued="false" />
   <field name="cpv_list" type="string" indexed="true" stored="true" required="false" multiValued="true" />
   <field name="updated" type="pdate" indexed="true" stored="true" multiValued="false" />
+  <field name="plazo_presentacion" type="pdate" indexed="true" stored="true" multiValued="false" />
   <field name="estado" type="string" indexed="true" stored="true" required="false" multiValued="false" />
   <field name="expediente" type="string" indexed="true" stored="true" required="false" multiValued="false" />
   <field name="objeto" type="string" indexed="true" stored="true" required="false" multiValued="false" />
@@ -138,6 +141,7 @@
   <field name="presupuesto_sin_iva" type="pfloat" indexed="true" stored="true" multiValued="false" />
   <field name="presupuesto_con_iva" type="pfloat" indexed="true" stored="true" multiValued="false" />
   <field name="duracion_dias" type="pfloat" indexed="true" stored="true" multiValued="false" />
+  <field name="over_threshold" type="boolean" indexed="true" stored="true" required="false" multiValued="false" />
   <field name="codigo_subentidad_territorial" type="string" indexed="true" stored="true" required="false" multiValued="false" />
   <field name="tipo_procedimiento" type="string" indexed="true" stored="true" required="false" multiValued="false" />
   <field name="tramitacion" type="string" indexed="true" stored="true" required="false" multiValued="false" />

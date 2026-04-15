@@ -1069,8 +1069,8 @@ class Queries(object):
         budget_min:       Optional[float]     = None,
         budget_max:       Optional[float]     = None,
         budget_field:     str                 = "presupuesto_sin_iva",
-        deadline_field:   str                 = "fecha_fin_presentacion",
-        award_field:      str                 = "fecha_adjudicacion",
+        deadline_field:   str                 = "plazo_presentacion",
+        award_field:      str                 = "fecha_acuerdo",
         subentidad:       Optional[str]       = None,
         cod_subentidad:   Optional[str]       = None,
         organo_id:        Optional[str]       = None,
@@ -1108,12 +1108,416 @@ class Queries(object):
             {
                 "label": r["label"],
                 "q":     "*:*",
-                "fq": " AND ".join([
-                    _bimester_fq(base_fq, date_field, r),
-                    f"{deadline_field}:[* TO *]",
-                    f"{award_field}:[* TO *]",
-                ]),
+                "fq":    _bimester_fq(base_fq, date_field, r),
                 "fl":    f"{deadline_field},{award_field}",
+                "rows":  "1000000",
+                "_meta": {"range": r},
+            }
+            for r in ranges
+        ]
+
+    # =========================================================================
+    # Q43 – Direct awards
+    # =========================================================================
+    def customize_Q43(
+        self,
+        date_field:            str                 = "updated",
+        date_start:            str                 = "2025-01-01T00:00:00Z",
+        date_end:              str                 = "2026-01-01T00:00:00Z",
+        tender_type:           Optional[str]       = None,
+        cpv_prefixes:          Optional[List[str]] = None,
+        cpv_field:             str                 = "cpv_list",
+        budget_min:            Optional[float]     = None,
+        budget_max:            Optional[float]     = None,
+        budget_field:          str                 = "presupuesto_sin_iva",
+        procedure_type_field:  str                 = "tipo_procedimiento",
+        subentidad:            Optional[str]       = None,
+        cod_subentidad:        Optional[str]       = None,
+        organo_id:             Optional[str]       = None,
+        topic_model:           Optional[str]       = None,
+        topic_id:              Optional[str]       = None,
+        topic_min_weight:      Optional[float]     = None,
+        extra_fq:              Optional[List[str]] = None,
+    ) -> List[dict]:
+        """
+        Customize Q43 – Direct awards.
+
+        Returns one Solr query dict per bimester fetching only the
+        procedure-type field. The direct-award ratio is computed in Python
+        (do_Q43) by checking whether tipo_procedimiento equals
+        "Negociado sin publicidad".
+
+        Returns
+        -------
+        List of dicts with keys: label, q, fq, fl, rows, _meta
+        """
+        ranges  = _bimester_ranges(date_start, date_end)
+        base_fq = _build_common_fq(
+            date_field=date_field, date_start=date_start, date_end=date_end,
+            tender_type=tender_type,
+            cpv_prefixes=cpv_prefixes, cpv_field=cpv_field,
+            budget_min=budget_min, budget_max=budget_max, budget_field=budget_field,
+            subentidad=subentidad, cod_subentidad=cod_subentidad,
+            organo_id=organo_id, topic_model=topic_model,
+            topic_id=topic_id, topic_min_weight=topic_min_weight,
+            extra_fq=extra_fq,
+        )
+
+        return [
+            {
+                "label": r["label"],
+                "q":     "*:*",
+                "fq":    _bimester_fq(base_fq, date_field, r),
+                "fl":    procedure_type_field,
+                "rows":  "1000000",
+                "_meta": {"range": r},
+            }
+            for r in ranges
+        ]
+
+    # =========================================================================
+    # Q44 – TED publication
+    # =========================================================================
+    def customize_Q44(
+        self,
+        date_field:       str                 = "updated",
+        date_start:       str                 = "2025-01-01T00:00:00Z",
+        date_end:         str                 = "2026-01-01T00:00:00Z",
+        tender_type:      Optional[str]       = None,
+        cpv_prefixes:     Optional[List[str]] = None,
+        cpv_field:        str                 = "cpv_list",
+        budget_min:       Optional[float]     = None,
+        budget_max:       Optional[float]     = None,
+        budget_field:     str                 = "presupuesto_sin_iva",
+        ted_field:        str                 = "TED_id",
+        subentidad:       Optional[str]       = None,
+        cod_subentidad:   Optional[str]       = None,
+        organo_id:        Optional[str]       = None,
+        topic_model:      Optional[str]       = None,
+        topic_id:         Optional[str]       = None,
+        topic_min_weight: Optional[float]     = None,
+        extra_fq:         Optional[List[str]] = None,
+    ) -> List[dict]:
+        """
+        Customize Q44 – TED publication.
+
+        Returns one Solr query dict per bimester fetching only the TED
+        identifier field. The publication ratio is computed in Python
+        (do_Q44) by checking whether the field is present and non-empty.
+
+        Returns
+        -------
+        List of dicts with keys: label, q, fq, fl, rows, _meta
+        """
+        ranges  = _bimester_ranges(date_start, date_end)
+        base_fq = _build_common_fq(
+            date_field=date_field, date_start=date_start, date_end=date_end,
+            tender_type=tender_type,
+            cpv_prefixes=cpv_prefixes, cpv_field=cpv_field,
+            budget_min=budget_min, budget_max=budget_max, budget_field=budget_field,
+            subentidad=subentidad, cod_subentidad=cod_subentidad,
+            organo_id=organo_id, topic_model=topic_model,
+            topic_id=topic_id, topic_min_weight=topic_min_weight,
+            extra_fq=extra_fq,
+        )
+
+        return [
+            {
+                "label": r["label"],
+                "q":     "*:*",
+                "fq":    _bimester_fq(base_fq, date_field, r),
+                "fl":    ted_field,
+                "rows":  "1000000",
+                "_meta": {"range": r},
+            }
+            for r in ranges
+        ]
+
+    # =========================================================================
+    # Q45 – SME participation (% lots with at least one SME offer)
+    # =========================================================================
+    def customize_Q45(
+        self,
+        date_field:       str                 = "updated",
+        date_start:       str                 = "2025-01-01T00:00:00Z",
+        date_end:         str                 = "2026-01-01T00:00:00Z",
+        tender_type:      Optional[str]       = None,
+        cpv_prefixes:     Optional[List[str]] = None,
+        cpv_field:        str                 = "cpv_list",
+        budget_min:       Optional[float]     = None,
+        budget_max:       Optional[float]     = None,
+        budget_field:     str                 = "presupuesto_sin_iva",
+        sme_field:        str                 = "ofertas_pymes",
+        subentidad:       Optional[str]       = None,
+        cod_subentidad:   Optional[str]       = None,
+        organo_id:        Optional[str]       = None,
+        topic_model:      Optional[str]       = None,
+        topic_id:         Optional[str]       = None,
+        topic_min_weight: Optional[float]     = None,
+        extra_fq:         Optional[List[str]] = None,
+    ) -> List[dict]:
+        """
+        Customize Q45 – SME participation.
+
+        Returns one Solr query dict per bimester fetching only the
+        ofertas_pymes field. The SME participation ratio is computed in
+        Python (do_Q45).
+
+        Returns
+        -------
+        List of dicts with keys: label, q, fq, fl, rows, _meta
+        """
+        ranges  = _bimester_ranges(date_start, date_end)
+        base_fq = _build_common_fq(
+            date_field=date_field, date_start=date_start, date_end=date_end,
+            tender_type=tender_type,
+            cpv_prefixes=cpv_prefixes, cpv_field=cpv_field,
+            budget_min=budget_min, budget_max=budget_max, budget_field=budget_field,
+            subentidad=subentidad, cod_subentidad=cod_subentidad,
+            organo_id=organo_id, topic_model=topic_model,
+            topic_id=topic_id, topic_min_weight=topic_min_weight,
+            extra_fq=extra_fq,
+        )
+
+        return [
+            {
+                "label": r["label"],
+                "q":     "*:*",
+                "fq":    _bimester_fq(base_fq, date_field, r),
+                "fl":    sme_field,
+                "rows":  "1000000",
+                "_meta": {"range": r},
+            }
+            for r in ranges
+        ]
+
+    # =========================================================================
+    # Q46 – SME offer ratio (sum(pyme_offers) / sum(total_offers))
+    # =========================================================================
+    def customize_Q46(
+        self,
+        date_field:       str                 = "updated",
+        date_start:       str                 = "2025-01-01T00:00:00Z",
+        date_end:         str                 = "2026-01-01T00:00:00Z",
+        tender_type:      Optional[str]       = None,
+        cpv_prefixes:     Optional[List[str]] = None,
+        cpv_field:        str                 = "cpv_list",
+        budget_min:       Optional[float]     = None,
+        budget_max:       Optional[float]     = None,
+        budget_field:     str                 = "presupuesto_sin_iva",
+        sme_field:        str                 = "ofertas_pymes",
+        offers_field:     str                 = "ofertas_recibidas",
+        subentidad:       Optional[str]       = None,
+        cod_subentidad:   Optional[str]       = None,
+        organo_id:        Optional[str]       = None,
+        topic_model:      Optional[str]       = None,
+        topic_id:         Optional[str]       = None,
+        topic_min_weight: Optional[float]     = None,
+        extra_fq:         Optional[List[str]] = None,
+    ) -> List[dict]:
+        """
+        Customize Q46 – SME offer ratio.
+
+        Returns one Solr query dict per bimester fetching both the total
+        offers and SME offers fields. The ratio is computed in Python
+        (do_Q46) as sum(sme_offers) / sum(total_offers).
+
+        Returns
+        -------
+        List of dicts with keys: label, q, fq, fl, rows, _meta
+        """
+        ranges  = _bimester_ranges(date_start, date_end)
+        base_fq = _build_common_fq(
+            date_field=date_field, date_start=date_start, date_end=date_end,
+            tender_type=tender_type,
+            cpv_prefixes=cpv_prefixes, cpv_field=cpv_field,
+            budget_min=budget_min, budget_max=budget_max, budget_field=budget_field,
+            subentidad=subentidad, cod_subentidad=cod_subentidad,
+            organo_id=organo_id, topic_model=topic_model,
+            topic_id=topic_id, topic_min_weight=topic_min_weight,
+            extra_fq=extra_fq,
+        )
+
+        return [
+            {
+                "label": r["label"],
+                "q":     "*:*",
+                "fq":    _bimester_fq(base_fq, date_field, r),
+                "fl":    f"{offers_field},{sme_field}",
+                "rows":  "1000000",
+                "_meta": {"range": r},
+            }
+            for r in ranges
+        ]
+
+    # =========================================================================
+    # Q47 – Lots division (% procedures with more than one lot)
+    # =========================================================================
+    def customize_Q47(
+        self,
+        date_field:       str                 = "updated",
+        date_start:       str                 = "2025-01-01T00:00:00Z",
+        date_end:         str                 = "2026-01-01T00:00:00Z",
+        tender_type:      Optional[str]       = None,
+        cpv_prefixes:     Optional[List[str]] = None,
+        cpv_field:        str                 = "cpv_list",
+        budget_min:       Optional[float]     = None,
+        budget_max:       Optional[float]     = None,
+        budget_field:     str                 = "presupuesto_sin_iva",
+        lots_field:       str                 = "lotes",
+        subentidad:       Optional[str]       = None,
+        cod_subentidad:   Optional[str]       = None,
+        organo_id:        Optional[str]       = None,
+        topic_model:      Optional[str]       = None,
+        topic_id:         Optional[str]       = None,
+        topic_min_weight: Optional[float]     = None,
+        extra_fq:         Optional[List[str]] = None,
+    ) -> List[dict]:
+        """
+        Customize Q47 – Lots division.
+
+        Returns one Solr query dict per bimester fetching only the lots
+        field. The percentage of multi-lot procedures is computed in
+        Python (do_Q47).
+
+        Returns
+        -------
+        List of dicts with keys: label, q, fq, fl, rows, _meta
+        """
+        ranges  = _bimester_ranges(date_start, date_end)
+        base_fq = _build_common_fq(
+            date_field=date_field, date_start=date_start, date_end=date_end,
+            tender_type=tender_type,
+            cpv_prefixes=cpv_prefixes, cpv_field=cpv_field,
+            budget_min=budget_min, budget_max=budget_max, budget_field=budget_field,
+            subentidad=subentidad, cod_subentidad=cod_subentidad,
+            organo_id=organo_id, topic_model=topic_model,
+            topic_id=topic_id, topic_min_weight=topic_min_weight,
+            extra_fq=extra_fq,
+        )
+
+        return [
+            {
+                "label": r["label"],
+                "q":     "*:*",
+                "fq":    _bimester_fq(base_fq, date_field, r),
+                "fl":    lots_field,
+                "rows":  "1000000",
+                "_meta": {"range": r},
+            }
+            for r in ranges
+        ]
+
+    # =========================================================================
+    # Q48 – Missing supplier ID (% awarded lots without supplier identifier)
+    # =========================================================================
+    def customize_Q48(
+        self,
+        date_field:        str                 = "updated",
+        date_start:        str                 = "2025-01-01T00:00:00Z",
+        date_end:          str                 = "2026-01-01T00:00:00Z",
+        tender_type:       Optional[str]       = None,
+        cpv_prefixes:      Optional[List[str]] = None,
+        cpv_field:         str                 = "cpv_list",
+        budget_min:        Optional[float]     = None,
+        budget_max:        Optional[float]     = None,
+        budget_field:      str                 = "presupuesto_sin_iva",
+        identifier_field:  str                 = "identificador",
+        subentidad:        Optional[str]       = None,
+        cod_subentidad:    Optional[str]       = None,
+        organo_id:         Optional[str]       = None,
+        topic_model:       Optional[str]       = None,
+        topic_id:          Optional[str]       = None,
+        topic_min_weight:  Optional[float]     = None,
+        extra_fq:          Optional[List[str]] = None,
+    ) -> List[dict]:
+        """
+        Customize Q48 – Missing supplier ID.
+
+        Returns one Solr query dict per bimester fetching only the
+        identificador field. The percentage of lots without a valid
+        supplier identifier is computed in Python (do_Q48).
+
+        Returns
+        -------
+        List of dicts with keys: label, q, fq, fl, rows, _meta
+        """
+        ranges  = _bimester_ranges(date_start, date_end)
+        base_fq = _build_common_fq(
+            date_field=date_field, date_start=date_start, date_end=date_end,
+            tender_type=tender_type,
+            cpv_prefixes=cpv_prefixes, cpv_field=cpv_field,
+            budget_min=budget_min, budget_max=budget_max, budget_field=budget_field,
+            subentidad=subentidad, cod_subentidad=cod_subentidad,
+            organo_id=organo_id, topic_model=topic_model,
+            topic_id=topic_id, topic_min_weight=topic_min_weight,
+            extra_fq=extra_fq,
+        )
+
+        return [
+            {
+                "label": r["label"],
+                "q":     "*:*",
+                "fq":    _bimester_fq(base_fq, date_field, r),
+                "fl":    identifier_field,
+                "rows":  "1000000",
+                "_meta": {"range": r},
+            }
+            for r in ranges
+        ]
+
+    # =========================================================================
+    # Q49 – Missing buyer ID (% procedures without contracting authority ID)
+    # =========================================================================
+    def customize_Q49(
+        self,
+        date_field:       str                 = "updated",
+        date_start:       str                 = "2025-01-01T00:00:00Z",
+        date_end:         str                 = "2026-01-01T00:00:00Z",
+        tender_type:      Optional[str]       = None,
+        cpv_prefixes:     Optional[List[str]] = None,
+        cpv_field:        str                 = "cpv_list",
+        budget_min:       Optional[float]     = None,
+        budget_max:       Optional[float]     = None,
+        budget_field:     str                 = "presupuesto_sin_iva",
+        buyer_id_field:   str                 = "organo_id",
+        subentidad:       Optional[str]       = None,
+        cod_subentidad:   Optional[str]       = None,
+        organo_id:        Optional[str]       = None,
+        topic_model:      Optional[str]       = None,
+        topic_id:         Optional[str]       = None,
+        topic_min_weight: Optional[float]     = None,
+        extra_fq:         Optional[List[str]] = None,
+    ) -> List[dict]:
+        """
+        Customize Q49 – Missing buyer ID.
+
+        Returns one Solr query dict per bimester fetching only the
+        organo_id field. The percentage of procedures without a buyer
+        identifier is computed in Python (do_Q49).
+
+        Returns
+        -------
+        List of dicts with keys: label, q, fq, fl, rows, _meta
+        """
+        ranges  = _bimester_ranges(date_start, date_end)
+        base_fq = _build_common_fq(
+            date_field=date_field, date_start=date_start, date_end=date_end,
+            tender_type=tender_type,
+            cpv_prefixes=cpv_prefixes, cpv_field=cpv_field,
+            budget_min=budget_min, budget_max=budget_max, budget_field=budget_field,
+            subentidad=subentidad, cod_subentidad=cod_subentidad,
+            organo_id=organo_id, topic_model=topic_model,
+            topic_id=topic_id, topic_min_weight=topic_min_weight,
+            extra_fq=extra_fq,
+        )
+
+        return [
+            {
+                "label": r["label"],
+                "q":     "*:*",
+                "fq":    _bimester_fq(base_fq, date_field, r),
+                "fl":    buyer_id_field,
                 "rows":  "1000000",
                 "_meta": {"range": r},
             }

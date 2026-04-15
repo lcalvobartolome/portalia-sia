@@ -47,6 +47,39 @@ router = APIRouter(
 
 
 # ======================================================
+# Source restrictions
+# ======================================================
+# Some indicators rely on fields that are only populated for certain data
+# sources. These constants declare the allowed tender_type values.
+# None (= all sources) is never valid for restricted indicators.
+
+_INSIDERS_ONLY: frozenset = frozenset({"insiders"})
+
+
+def _require_tender_type(
+    body: IndicatorRequest,
+    allowed: frozenset,
+    indicator: str,
+) -> None:
+    """
+    Raise ValidationException if body.tender_type is not in `allowed`.
+
+    Parameters
+    ----------
+    body      : incoming request body
+    allowed   : set of valid tender_type strings (e.g. _INSIDERS_ONLY)
+    indicator : human-readable indicator name used in the error message
+    """
+    if body.tender_type not in allowed:
+        allowed_str = ", ".join(f'"{v}"' for v in sorted(allowed))
+        raise ValidationException(
+            f"Indicator '{indicator}' is only available for "
+            f"tender_type in [{allowed_str}]. "
+            f"Received: {body.tender_type!r}."
+        )
+
+
+# ======================================================
 # Helper: build Solr filter query from MetadataFilter
 # ======================================================
 def _build_filter_query(
@@ -417,6 +450,91 @@ async def get_available_years(
         raise SolrException(str(e))
     
 
+# ======================================================
+# OpenAPI request body examples for indicator endpoints
+# These mirror the payload used by the plot_indicators.py script
+# (CPVs 48/72/73, full 2025-Feb 2026 range, one per tender_type).
+# ======================================================
+
+def _indicator_examples(extra_note: str = "") -> dict:
+    """
+    Return an openapi_extra dict that injects three named examples
+    into the Swagger UI for every indicator endpoint.
+    extra_note: optional text appended to the example summary line,
+                e.g. to flag insiders-only restrictions.
+    """
+    suffix = f" {extra_note}" if extra_note else ""
+    _BASE = {
+        "date_start":       "2025-01-01T00:00:00Z",
+        "date_end":         "2026-03-01T00:00:00Z",
+        "date_field":       "updated",
+        "cpv_prefixes":     ["48", "72", "73"],
+        "budget_min":       None,
+        "budget_max":       None,
+        "subentidad":       None,
+        "cod_subentidad":   None,
+        "organo_id":        None,
+        "topic_model":      None,
+        "topic_id":         None,
+        "topic_min_weight": None,
+    }
+    return {
+        "requestBody": {
+            "content": {
+                "application/json": {
+                    "examples": {
+                        "insiders (CPV 48/72/73, 2025-Feb 2026)": {
+                            "summary": f"insiders - CPV 48/72/73, Jan 2025-Feb 2026{suffix}",
+                            "value": {**_BASE, "tender_type": "insiders"},
+                        },
+                        "outsiders (CPV 48/72/73, 2025-Feb 2026)": {
+                            "summary": f"outsiders - CPV 48/72/73, Jan 2025-Feb 2026{suffix}",
+                            "value": {**_BASE, "tender_type": "outsiders"},
+                        },
+                        "minors (CPV 48/72/73, 2025-Feb 2026)": {
+                            "summary": f"minors - CPV 48/72/73, Jan 2025-Feb 2026{suffix}",
+                            "value": {**_BASE, "tender_type": "minors"},
+                        },
+                    }
+                }
+            }
+        }
+    }
+
+
+def _indicator_examples_insiders_only() -> dict:
+    """Variant for endpoints restricted to tender_type=insiders."""
+    _BASE = {
+        "date_start":       "2025-01-01T00:00:00Z",
+        "date_end":         "2026-03-01T00:00:00Z",
+        "date_field":       "updated",
+        "tender_type":      "insiders",
+        "cpv_prefixes":     ["48", "72", "73"],
+        "budget_min":       None,
+        "budget_max":       None,
+        "subentidad":       None,
+        "cod_subentidad":   None,
+        "organo_id":        None,
+        "topic_model":      None,
+        "topic_id":         None,
+        "topic_min_weight": None,
+    }
+    return {
+        "requestBody": {
+            "content": {
+                "application/json": {
+                    "examples": {
+                        "insiders (CPV 48/72/73, 2025-Feb 2026) [insiders only]": {
+                            "summary": "insiders - CPV 48/72/73, Jan 2025-Feb 2026 [insiders only]",
+                            "value": _BASE,
+                        },
+                    }
+                }
+            }
+        }
+    }
+
+
 @router.post(                          
     "/indicators/total-procurement",
     response_model=DataResponse,
@@ -428,6 +546,7 @@ async def get_available_years(
     responses=error_responses(
         ValidationException, SolrException,
     ),
+    openapi_extra=_indicator_examples(),
 )
 async def calculate_indicator_total_procurement(
     request: Request,
@@ -458,25 +577,378 @@ async def calculate_indicator_total_procurement(
     except Exception as e:
         raise SolrException(str(e))
 
-# @TODO: to be implemented
-@router.get(
-    "/corpora/{corpus_collection}/indicators/indicator2",
+@router.post(
+    "/indicators/single-bidder",
     response_model=DataResponse,
-    summary="Indicator 2",
-    description="Calculate indicator 2 for the corpus.",
-    responses=error_responses(
-        NotFoundException, SolrException,
-        NotFoundException="Corpus not found",
+    summary="Single bidder indicator",
+    description=(
+        "Percentage of lots with exactly one offer received, per bimester. "
+        "Includes field coverage statistics. "
+        "Filter by source, CPV, date range, geography or contracting authority."
     ),
+    responses=error_responses(ValidationException, SolrException),
+    openapi_extra=_indicator_examples(),
 )
-async def calculate_indicator_2(
+async def calculate_indicator_single_bidder(
     request: Request,
-    corpus_collection: str = Path(..., description="Corpus collection name"),
+    body: IndicatorRequest = Body(...),
 ) -> DataResponse:
-    """Calculate indicator 2."""
     sc = request.app.state.solr_client
     try:
-        result = {"indicator2": 3.14}  # Placeholder result
+        result, status = sc.do_Q41(
+            date_start       = body.date_start,
+            date_end         = body.date_end,
+            date_field       = body.date_field,
+            tender_type      = body.tender_type,
+            cpv_prefixes     = body.cpv_prefixes,
+            budget_min       = body.budget_min,
+            budget_max       = body.budget_max,
+            subentidad       = body.subentidad,
+            cod_subentidad   = body.cod_subentidad,
+            organo_id        = body.organo_id,
+            topic_model      = body.topic_model,
+            topic_id         = body.topic_id,
+            topic_min_weight = body.topic_min_weight,
+        )
+        if status != 200:
+            raise SolrException(result.get("error", "Solr query failed"))
+        return DataResponse(success=True, data=result)
+    except APIException:
+        raise
+    except Exception as e:
+        raise SolrException(str(e))
+
+
+@router.post(
+    "/indicators/decision-speed",
+    response_model=DataResponse,
+    summary="Decision speed indicator",
+    description=(
+        "Average days between submission deadline and award decision, per bimester. "
+        "Filter by source, CPV, date range, geography or contracting authority."
+    ),
+    responses=error_responses(ValidationException, SolrException),
+    openapi_extra=_indicator_examples_insiders_only(),
+)
+async def calculate_indicator_decision_speed(
+    request: Request,
+    body: IndicatorRequest = Body(...),
+) -> DataResponse:
+    _require_tender_type(body, _INSIDERS_ONLY, "decision-speed")
+    sc = request.app.state.solr_client
+    try:
+        result, status = sc.do_Q42(
+            date_start       = body.date_start,
+            date_end         = body.date_end,
+            date_field       = body.date_field,
+            tender_type      = body.tender_type,
+            cpv_prefixes     = body.cpv_prefixes,
+            budget_min       = body.budget_min,
+            budget_max       = body.budget_max,
+            subentidad       = body.subentidad,
+            cod_subentidad   = body.cod_subentidad,
+            organo_id        = body.organo_id,
+            topic_model      = body.topic_model,
+            topic_id         = body.topic_id,
+            topic_min_weight = body.topic_min_weight,
+        )
+        if status != 200:
+            raise SolrException(result.get("error", "Solr query failed"))
+        return DataResponse(success=True, data=result)
+    except APIException:
+        raise
+    except Exception as e:
+        raise SolrException(str(e))
+
+
+@router.post(
+    "/indicators/direct-awards",
+    response_model=DataResponse,
+    summary="Direct awards indicator",
+    description=(
+        "Percentage of procedures awarded via 'Negociado sin publicidad', per bimester. "
+        "Includes field coverage statistics. "
+        "Filter by source, CPV, date range, geography or contracting authority."
+    ),
+    responses=error_responses(ValidationException, SolrException),
+    openapi_extra=_indicator_examples(),
+)
+async def calculate_indicator_direct_awards(
+    request: Request,
+    body: IndicatorRequest = Body(...),
+) -> DataResponse:
+    sc = request.app.state.solr_client
+    try:
+        result, status = sc.do_Q43(
+            date_start       = body.date_start,
+            date_end         = body.date_end,
+            date_field       = body.date_field,
+            tender_type      = body.tender_type,
+            cpv_prefixes     = body.cpv_prefixes,
+            budget_min       = body.budget_min,
+            budget_max       = body.budget_max,
+            subentidad       = body.subentidad,
+            cod_subentidad   = body.cod_subentidad,
+            organo_id        = body.organo_id,
+            topic_model      = body.topic_model,
+            topic_id         = body.topic_id,
+            topic_min_weight = body.topic_min_weight,
+        )
+        if status != 200:
+            raise SolrException(result.get("error", "Solr query failed"))
+        return DataResponse(success=True, data=result)
+    except APIException:
+        raise
+    except Exception as e:
+        raise SolrException(str(e))
+
+
+@router.post(
+    "/indicators/ted-publication",
+    response_model=DataResponse,
+    summary="TED publication indicator",
+    description=(
+        "Percentage of procedures published in the EU TED portal, per bimester. "
+        "Filter by source, CPV, date range, geography or contracting authority."
+    ),
+    responses=error_responses(ValidationException, SolrException),
+    openapi_extra=_indicator_examples(),
+)
+async def calculate_indicator_ted_publication(
+    request: Request,
+    body: IndicatorRequest = Body(...),
+) -> DataResponse:
+    sc = request.app.state.solr_client
+    try:
+        result, status = sc.do_Q44(
+            date_start       = body.date_start,
+            date_end         = body.date_end,
+            date_field       = body.date_field,
+            tender_type      = body.tender_type,
+            cpv_prefixes     = body.cpv_prefixes,
+            budget_min       = body.budget_min,
+            budget_max       = body.budget_max,
+            subentidad       = body.subentidad,
+            cod_subentidad   = body.cod_subentidad,
+            organo_id        = body.organo_id,
+            topic_model      = body.topic_model,
+            topic_id         = body.topic_id,
+            topic_min_weight = body.topic_min_weight,
+        )
+        if status != 200:
+            raise SolrException(result.get("error", "Solr query failed"))
+        return DataResponse(success=True, data=result)
+    except APIException:
+        raise
+    except Exception as e:
+        raise SolrException(str(e))
+
+
+@router.post(
+    "/indicators/sme-participation",
+    response_model=DataResponse,
+    summary="SME participation indicator",
+    description=(
+        "Percentage of lots with at least one SME offer, per bimester. "
+        "Includes field coverage statistics. "
+        "Filter by source, CPV, date range, geography or contracting authority."
+    ),
+    responses=error_responses(ValidationException, SolrException),
+    openapi_extra=_indicator_examples_insiders_only(),
+)
+async def calculate_indicator_sme_participation(
+    request: Request,
+    body: IndicatorRequest = Body(...),
+) -> DataResponse:
+    _require_tender_type(body, _INSIDERS_ONLY, "sme-participation")
+    sc = request.app.state.solr_client
+    try:
+        result, status = sc.do_Q45(
+            date_start       = body.date_start,
+            date_end         = body.date_end,
+            date_field       = body.date_field,
+            tender_type      = body.tender_type,
+            cpv_prefixes     = body.cpv_prefixes,
+            budget_min       = body.budget_min,
+            budget_max       = body.budget_max,
+            subentidad       = body.subentidad,
+            cod_subentidad   = body.cod_subentidad,
+            organo_id        = body.organo_id,
+            topic_model      = body.topic_model,
+            topic_id         = body.topic_id,
+            topic_min_weight = body.topic_min_weight,
+        )
+        if status != 200:
+            raise SolrException(result.get("error", "Solr query failed"))
+        return DataResponse(success=True, data=result)
+    except APIException:
+        raise
+    except Exception as e:
+        raise SolrException(str(e))
+
+
+@router.post(
+    "/indicators/sme-offer-ratio",
+    response_model=DataResponse,
+    summary="SME offer ratio indicator",
+    description=(
+        "Percentage of all offers submitted by SMEs, per bimester. "
+        "Includes field coverage statistics. "
+        "Filter by source, CPV, date range, geography or contracting authority."
+    ),
+    responses=error_responses(ValidationException, SolrException),
+    openapi_extra=_indicator_examples_insiders_only(),
+)
+async def calculate_indicator_sme_offer_ratio(
+    request: Request,
+    body: IndicatorRequest = Body(...),
+) -> DataResponse:
+    _require_tender_type(body, _INSIDERS_ONLY, "sme-offer-ratio")
+    sc = request.app.state.solr_client
+    try:
+        result, status = sc.do_Q46(
+            date_start       = body.date_start,
+            date_end         = body.date_end,
+            date_field       = body.date_field,
+            tender_type      = body.tender_type,
+            cpv_prefixes     = body.cpv_prefixes,
+            budget_min       = body.budget_min,
+            budget_max       = body.budget_max,
+            subentidad       = body.subentidad,
+            cod_subentidad   = body.cod_subentidad,
+            organo_id        = body.organo_id,
+            topic_model      = body.topic_model,
+            topic_id         = body.topic_id,
+            topic_min_weight = body.topic_min_weight,
+        )
+        if status != 200:
+            raise SolrException(result.get("error", "Solr query failed"))
+        return DataResponse(success=True, data=result)
+    except APIException:
+        raise
+    except Exception as e:
+        raise SolrException(str(e))
+
+
+@router.post(
+    "/indicators/lots-division",
+    response_model=DataResponse,
+    summary="Lots division indicator",
+    description=(
+        "Percentage of procedures divided into more than one lot, per bimester. "
+        "Includes field coverage statistics. "
+        "Filter by source, CPV, date range, geography or contracting authority."
+    ),
+    responses=error_responses(ValidationException, SolrException),
+    openapi_extra=_indicator_examples(),
+)
+async def calculate_indicator_lots_division(
+    request: Request,
+    body: IndicatorRequest = Body(...),
+) -> DataResponse:
+    sc = request.app.state.solr_client
+    try:
+        result, status = sc.do_Q47(
+            date_start       = body.date_start,
+            date_end         = body.date_end,
+            date_field       = body.date_field,
+            tender_type      = body.tender_type,
+            cpv_prefixes     = body.cpv_prefixes,
+            budget_min       = body.budget_min,
+            budget_max       = body.budget_max,
+            subentidad       = body.subentidad,
+            cod_subentidad   = body.cod_subentidad,
+            organo_id        = body.organo_id,
+            topic_model      = body.topic_model,
+            topic_id         = body.topic_id,
+            topic_min_weight = body.topic_min_weight,
+        )
+        if status != 200:
+            raise SolrException(result.get("error", "Solr query failed"))
+        return DataResponse(success=True, data=result)
+    except APIException:
+        raise
+    except Exception as e:
+        raise SolrException(str(e))
+
+
+@router.post(
+    "/indicators/missing-supplier-id",
+    response_model=DataResponse,
+    summary="Missing supplier ID indicator",
+    description=(
+        "Percentage of awarded lots where the supplier identifier is absent, "
+        "per bimester. "
+        "Filter by source, CPV, date range, geography or contracting authority."
+    ),
+    responses=error_responses(ValidationException, SolrException),
+    openapi_extra=_indicator_examples(),
+)
+async def calculate_indicator_missing_supplier_id(
+    request: Request,
+    body: IndicatorRequest = Body(...),
+) -> DataResponse:
+    sc = request.app.state.solr_client
+    try:
+        result, status = sc.do_Q48(
+            date_start       = body.date_start,
+            date_end         = body.date_end,
+            date_field       = body.date_field,
+            tender_type      = body.tender_type,
+            cpv_prefixes     = body.cpv_prefixes,
+            budget_min       = body.budget_min,
+            budget_max       = body.budget_max,
+            subentidad       = body.subentidad,
+            cod_subentidad   = body.cod_subentidad,
+            organo_id        = body.organo_id,
+            topic_model      = body.topic_model,
+            topic_id         = body.topic_id,
+            topic_min_weight = body.topic_min_weight,
+        )
+        if status != 200:
+            raise SolrException(result.get("error", "Solr query failed"))
+        return DataResponse(success=True, data=result)
+    except APIException:
+        raise
+    except Exception as e:
+        raise SolrException(str(e))
+
+
+@router.post(
+    "/indicators/missing-buyer-id",
+    response_model=DataResponse,
+    summary="Missing buyer ID indicator",
+    description=(
+        "Percentage of procedures where the contracting authority identifier "
+        "is absent, per bimester. "
+        "Filter by source, CPV, date range, geography or contracting authority."
+    ),
+    responses=error_responses(ValidationException, SolrException),
+    openapi_extra=_indicator_examples(),
+)
+async def calculate_indicator_missing_buyer_id(
+    request: Request,
+    body: IndicatorRequest = Body(...),
+) -> DataResponse:
+    sc = request.app.state.solr_client
+    try:
+        result, status = sc.do_Q49(
+            date_start       = body.date_start,
+            date_end         = body.date_end,
+            date_field       = body.date_field,
+            tender_type      = body.tender_type,
+            cpv_prefixes     = body.cpv_prefixes,
+            budget_min       = body.budget_min,
+            budget_max       = body.budget_max,
+            subentidad       = body.subentidad,
+            cod_subentidad   = body.cod_subentidad,
+            organo_id        = body.organo_id,
+            topic_model      = body.topic_model,
+            topic_id         = body.topic_id,
+            topic_min_weight = body.topic_min_weight,
+        )
+        if status != 200:
+            raise SolrException(result.get("error", "Solr query failed"))
         return DataResponse(success=True, data=result)
     except APIException:
         raise

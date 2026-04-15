@@ -213,3 +213,4 @@ db/data/zoo/logs/
 solr-plugins
 db
 sia-config/api_keys.json
+sia-core-api/figures

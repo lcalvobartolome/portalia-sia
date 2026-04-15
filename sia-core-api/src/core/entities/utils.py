@@ -53,10 +53,21 @@ def convert_datetime_to_strftime(df):
 
 def parseTimeINSTANT(time):
     """
-    Parses a string representing an instant in time and returns it as an Instant object.
-    Supports ISO 8601 with timezone (e.g. '2024-12-30T13:52:11.444+01:00') and
-    '%Y-%m-%d %H:%M:%S' formats.
+    Parses a string or datetime-like value representing an instant in time.
+    Supports ISO 8601 with timezone (e.g. '2024-12-30T13:52:11.444+01:00'),
+    '%Y-%m-%d %H:%M:%S' string formats, and pandas Timestamp / datetime objects.
     """
+    import pandas as pd
+    # Handle pandas NaT
+    if time is pd.NaT or (isinstance(time, float) and math.isnan(time)):
+        return clean_xml_string("")
+    # Handle pandas Timestamp or Python datetime objects
+    if isinstance(time, (pd.Timestamp, datetime)):
+        dt = time.to_pydatetime() if isinstance(time, pd.Timestamp) else time
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=pytz.UTC)
+        dt_utc = dt.astimezone(pytz.UTC)
+        return clean_xml_string(dt_utc.strftime('%Y-%m-%dT%H:%M:%S.%fZ'))
     if isinstance(time, str) and time not in ("", "foo"):
         try:
             # ISO 8601 with optional timezone — works for both naive and aware
@@ -67,8 +78,8 @@ def parseTimeINSTANT(time):
             dt = dt.replace(tzinfo=pytz.UTC)
         dt_utc = dt.astimezone(pytz.UTC)
         return clean_xml_string(dt_utc.strftime('%Y-%m-%dT%H:%M:%S.%fZ'))
-    else:
-        return clean_xml_string("")
+    return clean_xml_string("")
+
         
 def sum_up_to(
     vector: np.ndarray,

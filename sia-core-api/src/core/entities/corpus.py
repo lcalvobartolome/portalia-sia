@@ -129,10 +129,21 @@ from src.core.entities.utils import parseTimeINSTANT
 
 # def parseTimeINSTANT(time):
 #     """
-#     Parses a string representing an instant in time and returns it as an Instant object.
-#     Supports ISO 8601 with timezone (e.g. '2024-12-30T13:52:11.444+01:00') and
-#     '%Y-%m-%d %H:%M:%S' formats.
+#     Parses a string or datetime-like value representing an instant in time.
+#     Supports ISO 8601 with timezone (e.g. '2024-12-30T13:52:11.444+01:00'),
+#     '%Y-%m-%d %H:%M:%S' string formats, and pandas Timestamp / datetime objects.
 #     """
+#     import pandas as pd
+#     # Handle pandas NaT
+#     if time is pd.NaT or (isinstance(time, float) and math.isnan(time)):
+#         return clean_xml_string("")
+#     # Handle pandas Timestamp or Python datetime objects
+#     if isinstance(time, (pd.Timestamp, datetime)):
+#         dt = time.to_pydatetime() if isinstance(time, pd.Timestamp) else time
+#         if dt.tzinfo is None:
+#             dt = dt.replace(tzinfo=pytz.UTC)
+#         dt_utc = dt.astimezone(pytz.UTC)
+#         return clean_xml_string(dt_utc.strftime('%Y-%m-%dT%H:%M:%S.%fZ'))
 #     if isinstance(time, str) and time not in ("", "foo"):
 #         try:
 #             # ISO 8601 with optional timezone — works for both naive and aware
@@ -143,8 +154,7 @@ from src.core.entities.utils import parseTimeINSTANT
 #             dt = dt.replace(tzinfo=pytz.UTC)
 #         dt_utc = dt.astimezone(pytz.UTC)
 #         return clean_xml_string(dt_utc.strftime('%Y-%m-%dT%H:%M:%S.%fZ'))
-#     else:
-#         return clean_xml_string("")
+#     return clean_xml_string("")
 
 from alia_pipeline.utils.filter_utils import get_cpv_filtered_ids
 
@@ -241,10 +251,13 @@ class Corpus(object):
             return []
         else:
             try:
-                result = ast.literal_eval(val)
-                if not isinstance(result, list):
+                result = json.loads(val)
+            except (ValueError, json.JSONDecodeError):
+                try:
+                    result = ast.literal_eval(val)
+                except (ValueError, SyntaxError):
                     return []
-            except (ValueError, SyntaxError):
+            if not isinstance(result, list):
                 return []
         if serialize_elements:
             if sep is not None:
@@ -301,7 +314,7 @@ class Corpus(object):
 
             # Keep only the necessary fields
             cols_keep = [
-                'id', 'tender_type', 'id_tecnico', 'title', 'date', 'summary', 'updated', 'link',
+                'id', 'ted_id', 'tender_type', 'id_tecnico', 'title', 'date', 'summary', 'updated', 'link',
                 'estado', 'expediente', 'objeto', 'valor_estimado', 'presupuesto_sin_iva',
                 'presupuesto_con_iva', 'duracion_dias', 'cpv_list', 'ted_id',
                 'subentidad_nacional', 'codigo_subentidad_territorial', 'lotes',
@@ -379,7 +392,7 @@ class Corpus(object):
                         "SearcheableFields": self.SearcheableField}]
 
         return fields_dict
-    
+
     def get_enrich_update(self):
         
         # read DATA_DIR="${BASE_DIR}/metadata/${TIPO}translate"
@@ -390,7 +403,7 @@ class Corpus(object):
 #     corpus = Corpus(corpus_name="place", config_file="/export/usuarios_ml4ds/lbartolome/Repos/alia/alia-sia/sia-config/config.cf")
 #     # run for all documents
 #     for doc in corpus.get_docs_metadata():
-#         # print as JSON string
-#         print(json.dumps(doc, ensure_ascii=False))
-#         import pdb; pdb.set_trace()
+#         if doc["plazo_presentacion"] != "":
+#             print(doc["id"], doc["plazo_presentacion"])
+#             import pdb; pdb.set_trace()
     

@@ -1013,16 +1013,16 @@ class TemporalSearchRequest(SearchRequestBase):
         }
         
 class IndicatorRequest(BaseModel):
-    date_start:       str                        = "2025-01-01T00:00:00Z"
-    date_end:         str                        = "2026-01-01T00:00:00Z"
-    date_field:       str                        = "updated"
-    tender_type:      str | None                 = None   # insiders/outsiders/minors/None
-    cpv_prefixes:     list[str] | None           = None
-    budget_min:       float | None               = None
-    budget_max:       float | None               = None
-    subentidad:       str | None                 = None
-    cod_subentidad:   str | None                 = None
-    organo_id:        str | None                 = None
-    topic_model:      str | None                 = None
-    topic_id:         str | None                 = None
-    topic_min_weight: float | None               = None
+    date_start:   str          = Field("2025-01-01T00:00:00Z", example="2025-01-01T00:00:00Z")
+    date_end:     str          = Field("2026-01-01T00:00:00Z", example="2026-01-01T00:00:00Z")
+    date_field:   str          = Field("updated", example="updated")
+    tender_type:  str | None   = Field(None, example="minors")
+    cpv_prefixes: list[str] | None = Field(None, example=["72", "48"])
+    budget_min:   float | None = Field(None, example=None)
+    budget_max:   float | None = Field(None, example=None)
+    subentidad:   str | None   = Field(None, example=None)
+    cod_subentidad: str | None = Field(None, example=None)
+    organo_id:    str | None   = Field(None, example=None)
+    topic_model:  str | None   = Field(None, example=None)
+    topic_id:     str | None   = Field(None, example=None)
+    topic_min_weight: float | None = Field(None, example=None)

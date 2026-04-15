@@ -34,19 +34,35 @@ def _safe(val):
     return round(val, 4)
  
  
+def _parse_date_flexible(raw: str) -> Optional[datetime]:
+    """
+    Parse a date string that may be in any of these formats:
+        "2024-11-28T00:00:00Z"   (full ISO-8601 UTC)
+        "2024-11-28"             (date only, as stored in fecha_acuerdo)
+    Returns a timezone-aware datetime or None on failure.
+    """
+    if not raw:
+        return None
+    for fmt in ("%Y-%m-%dT%H:%M:%SZ", "%Y-%m-%d"):
+        try:
+            return datetime.strptime(raw, fmt).replace(tzinfo=timezone.utc)
+        except ValueError:
+            continue
+    return None
+ 
+ 
 def _date_diff_days(d1: str, d2: str) -> Optional[float]:
     """
     Return max(d2 - d1, 0) in days, or None if either value is missing
-    or cannot be parsed.
+    or cannot be parsed.  Accepts both full ISO-8601 and date-only strings.
     """
     if not d1 or not d2:
         return None
-    try:
-        t1 = datetime.strptime(d1, _DATE_FMT).replace(tzinfo=timezone.utc)
-        t2 = datetime.strptime(d2, _DATE_FMT).replace(tzinfo=timezone.utc)
-        return max((t2 - t1).total_seconds() / 86_400.0, 0.0)
-    except Exception:
+    t1 = _parse_date_flexible(d1)
+    t2 = _parse_date_flexible(d2)
+    if t1 is None or t2 is None:
         return None
+    return max((t2 - t1).total_seconds() / 86_400.0, 0.0)
  
 def _parse_date_field(raw) -> List[Optional[str]]:
     """
@@ -66,8 +82,6 @@ def _parse_date_field(raw) -> List[Optional[str]]:
         except (AttributeError, IndexError):
             result.append(None)
     return result
- 
- 
  
 def _parse_lot_offers(raw) -> List[Optional[int]]:
     """
@@ -89,6 +103,22 @@ def _parse_lot_offers(raw) -> List[Optional[int]]:
             result.append(None)
     return result
  
+ 
+def _parse_lot_int_values(raw) -> List[Optional[int]]:
+    """
+    Generic parser for lot-level integer fields stored as "lot_id|value" strings.
+    Returns a flat list of int-or-None values, one per lot entry.
+    """
+    if not isinstance(raw, (list, tuple)) or not raw:
+        return []
+    result: List[Optional[int]] = []
+    for item in raw:
+        try:
+            val = item.split("|")[1]
+            result.append(int(val))
+        except (AttributeError, IndexError, ValueError):
+            result.append(None)
+    return result
 
 class SIASolrClient(SolrClient):
 
@@ -2153,9 +2183,9 @@ class SIASolrClient(SolrClient):
         return result, last_sc
  
  
-    # ===========================================================================
+    # =======================================================================
     # do_Q42 – Decision speed
-    # ===========================================================================
+    # =======================================================================
     
     def do_Q42(
         self,
@@ -2168,8 +2198,8 @@ class SIASolrClient(SolrClient):
         budget_min:       Optional[float]     = None,
         budget_max:       Optional[float]     = None,
         budget_field:     str                 = "presupuesto_sin_iva",
-        deadline_field:   str                 = "fecha_fin_presentacion",
-        award_field:      str                 = "fecha_adjudicacion",
+        deadline_field:   str                 = "plazo_presentacion",
+        award_field:      str                 = "fecha_acuerdo",
         subentidad:       Optional[str]       = None,
         cod_subentidad:   Optional[str]       = None,
         organo_id:        Optional[str]       = None,
@@ -2240,12 +2270,28 @@ class SIASolrClient(SolrClient):
     
             deltas: List[float] = []
             for doc in results.docs:
-                # Both fields may be plain ISO strings or "lot_id|date" lists
-                deadlines = _parse_date_field(doc.get(deadline_field))
-                awards    = _parse_date_field(doc.get(award_field))
-                for d1, d2 in zip(deadlines, awards):
-                    delta = _date_diff_days(d1, d2)
-                    if delta is not None:
+                # plazo_presentacion is a plain ISO string (one per tender);
+                # fecha_acuerdo is a list of "lot_id|date" strings (one per lot).
+                # We pair the single deadline with every award date.
+                raw_deadline = doc.get(deadline_field)
+                raw_awards   = doc.get(award_field)
+ 
+                if not raw_deadline or not raw_awards:
+                    continue
+ 
+                # Normalise deadline to a single string
+                if isinstance(raw_deadline, list):
+                    deadline_str = _parse_date_field(raw_deadline)[0] if raw_deadline else None
+                else:
+                    deadline_str = raw_deadline
+ 
+                if not deadline_str:
+                    continue
+ 
+                # Parse every award date and diff against the shared deadline
+                for award_str in _parse_date_field(raw_awards):
+                    delta = _date_diff_days(deadline_str, award_str)
+                    if delta is not None and 0 <= delta <= 365:
                         deltas.append(delta)
     
             labels.append(label)
@@ -2259,3 +2305,718 @@ class SIASolrClient(SolrClient):
             "n_obs":           n_obs,
         }
         return result, last_sc
+
+
+    # =========================================================================
+    # do_Q43 – Direct awards
+    # =========================================================================
+ 
+    def do_Q43(
+        self,
+        date_start:            str,
+        date_end:              str,
+        date_field:            str                 = "updated",
+        tender_type:           Optional[str]       = None,
+        cpv_prefixes:          Optional[List[str]] = None,
+        cpv_field:             str                 = "cpv_list",
+        budget_min:            Optional[float]     = None,
+        budget_max:            Optional[float]     = None,
+        budget_field:          str                 = "presupuesto_sin_iva",
+        procedure_type_field:  str                 = "tipo_procedimiento",
+        direct_award_value:    str                 = "Negociado sin publicidad",
+        subentidad:            Optional[str]       = None,
+        cod_subentidad:        Optional[str]       = None,
+        organo_id:             Optional[str]       = None,
+        topic_model:           Optional[str]       = None,
+        topic_id:              Optional[str]       = None,
+        topic_min_weight:      Optional[float]     = None,
+        extra_fq:              Optional[List[str]] = None,
+    ) -> Tuple[dict, int]:
+        """
+        Executes Q43 – Direct awards.
+ 
+        Issues one Solr request per bimester fetching only the procedure-type
+        field. The direct-award ratio and metadata coverage are computed in
+        Python.
+ 
+        Returns
+        -------
+        (result, status_code)
+ 
+        result = {
+            "id":              "direct_awards",
+            "bimester_labels": ["Ene–Feb 2025", ...],
+            "pct_direct":      [18.3, 15.1, ...],   # % direct-award procedures
+            "coverage":        [100.0, 100.0, ...],  # % procedures with field present
+            "n_tenders":       [1200, 980, ...],
+        }
+        """
+        if not self.check_is_corpus(_PLACE_COL):
+            return {"error": f'"{_PLACE_COL}" is not a valid corpus collection'}, 400
+ 
+        queries = self.querier.customize_Q43(
+            date_field=date_field, date_start=date_start, date_end=date_end,
+            tender_type=tender_type,
+            cpv_prefixes=cpv_prefixes, cpv_field=cpv_field,
+            budget_min=budget_min, budget_max=budget_max, budget_field=budget_field,
+            procedure_type_field=procedure_type_field,
+            subentidad=subentidad, cod_subentidad=cod_subentidad,
+            organo_id=organo_id, topic_model=topic_model,
+            topic_id=topic_id, topic_min_weight=topic_min_weight,
+            extra_fq=extra_fq,
+        )
+ 
+        labels:    List = []
+        pct_list:  List = []
+        cov_list:  List = []
+        n_list:    List = []
+        last_sc = 200
+ 
+        for q in queries:
+            label = q.pop("label")
+            q.pop("_meta")
+            params = {k: v for k, v in q.items() if k != "q"}
+ 
+            self.logger.info(f"do_Q43 | bim={label} | tender_type={tender_type}")
+ 
+            sc, results = self.execute_query(q=q["q"], col_name=_PLACE_COL, **params)
+            if sc != 200:
+                self.logger.error(f"do_Q43: Solr returned {sc} for bimester '{label}'")
+                last_sc = sc
+                labels.append(label); pct_list.append(None)
+                cov_list.append(None); n_list.append(None)
+                continue
+ 
+            total = with_value = direct = 0
+            for doc in results.docs:
+                total += 1
+                val = doc.get(procedure_type_field)
+                if val is not None:
+                    with_value += 1
+                    if val == direct_award_value:
+                        direct += 1
+ 
+            labels.append(label)
+            cov_list.append(_safe(with_value / total * 100) if total > 0 else None)
+            pct_list.append(_safe(direct / with_value * 100) if with_value > 0 else None)
+            n_list.append(total)
+ 
+        result = {
+            "id":              "direct_awards",
+            "bimester_labels": labels,
+            "pct_direct":      pct_list,
+            "coverage":        cov_list,
+            "n_tenders":       n_list,
+        }
+        return result, last_sc
+ 
+    # =========================================================================
+    # do_Q44 – TED publication
+    # =========================================================================
+ 
+    def do_Q44(
+        self,
+        date_start:       str,
+        date_end:         str,
+        date_field:       str                 = "updated",
+        tender_type:      Optional[str]       = None,
+        cpv_prefixes:     Optional[List[str]] = None,
+        cpv_field:        str                 = "cpv_list",
+        budget_min:       Optional[float]     = None,
+        budget_max:       Optional[float]     = None,
+        budget_field:     str                 = "presupuesto_sin_iva",
+        ted_field:        str                 = "ted_id",
+        subentidad:       Optional[str]       = None,
+        cod_subentidad:   Optional[str]       = None,
+        organo_id:        Optional[str]       = None,
+        topic_model:      Optional[str]       = None,
+        topic_id:         Optional[str]       = None,
+        topic_min_weight: Optional[float]     = None,
+        extra_fq:         Optional[List[str]] = None,
+    ) -> Tuple[dict, int]:
+        """
+        Executes Q44 – TED publication.
+ 
+        Issues one Solr request per bimester fetching only the TED identifier
+        field and computes the percentage of procedures published in TED.
+ 
+        Returns
+        -------
+        (result, status_code)
+ 
+        result = {
+            "id":              "ted_publication",
+            "bimester_labels": ["Ene–Feb 2025", ...],
+            "pct_ted":         [18.0, 22.5, ...],  # % procedures with TED id
+            "n_tenders":       [1200, 980, ...],
+        }
+        """
+        if not self.check_is_corpus(_PLACE_COL):
+            return {"error": f'"{_PLACE_COL}" is not a valid corpus collection'}, 400
+ 
+        queries = self.querier.customize_Q44(
+            date_field=date_field, date_start=date_start, date_end=date_end,
+            tender_type=tender_type,
+            cpv_prefixes=cpv_prefixes, cpv_field=cpv_field,
+            budget_min=budget_min, budget_max=budget_max, budget_field=budget_field,
+            ted_field=ted_field,
+            subentidad=subentidad, cod_subentidad=cod_subentidad,
+            organo_id=organo_id, topic_model=topic_model,
+            topic_id=topic_id, topic_min_weight=topic_min_weight,
+            extra_fq=extra_fq,
+        )
+ 
+        labels:   List = []
+        pct_list: List = []
+        n_list:   List = []
+        last_sc = 200
+ 
+        for q in queries:
+            label = q.pop("label")
+            q.pop("_meta")
+            params = {k: v for k, v in q.items() if k != "q"}
+ 
+            self.logger.info(f"do_Q44 | bim={label} | tender_type={tender_type}")
+ 
+            sc, results = self.execute_query(q=q["q"], col_name=_PLACE_COL, **params)
+            if sc != 200:
+                self.logger.error(f"do_Q44: Solr returned {sc} for bimester '{label}'")
+                last_sc = sc
+                labels.append(label); pct_list.append(None); n_list.append(None)
+                continue
+ 
+            total = with_ted = 0
+            for doc in results.docs:
+                total += 1
+                val = doc.get(ted_field)
+                if val is not None and val != "":
+                    with_ted += 1
+ 
+            labels.append(label)
+            pct_list.append(_safe(with_ted / total * 100) if total > 0 else None)
+            n_list.append(total)
+ 
+        result = {
+            "id":              "ted_publication",
+            "bimester_labels": labels,
+            "pct_ted":         pct_list,
+            "n_tenders":       n_list,
+        }
+        return result, last_sc
+ 
+    # =========================================================================
+    # do_Q45 – SME participation (% lots with >= 1 SME offer)
+    # =========================================================================
+ 
+    def do_Q45(
+        self,
+        date_start:       str,
+        date_end:         str,
+        date_field:       str                 = "updated",
+        tender_type:      Optional[str]       = None,
+        cpv_prefixes:     Optional[List[str]] = None,
+        cpv_field:        str                 = "cpv_list",
+        budget_min:       Optional[float]     = None,
+        budget_max:       Optional[float]     = None,
+        budget_field:     str                 = "presupuesto_sin_iva",
+        sme_field:        str                 = "ofertas_pymes",
+        subentidad:       Optional[str]       = None,
+        cod_subentidad:   Optional[str]       = None,
+        organo_id:        Optional[str]       = None,
+        topic_model:      Optional[str]       = None,
+        topic_id:         Optional[str]       = None,
+        topic_min_weight: Optional[float]     = None,
+        extra_fq:         Optional[List[str]] = None,
+    ) -> Tuple[dict, int]:
+        """
+        Executes Q45 – SME participation.
+ 
+        Returns the percentage of lots in which at least one SME submitted
+        an offer, together with field coverage.
+ 
+        Returns
+        -------
+        (result, status_code)
+ 
+        result = {
+            "id":              "sme_participation",
+            "bimester_labels": ["Ene–Feb 2025", ...],
+            "pct_sme":         [62.4, 58.1, ...],  # % lots with >= 1 SME offer
+            "coverage":        [97.5, 97.8, ...],
+            "n_lots_total":    [4200, 5100, ...],
+        }
+        """
+        if not self.check_is_corpus(_PLACE_COL):
+            return {"error": f'"{_PLACE_COL}" is not a valid corpus collection'}, 400
+ 
+        queries = self.querier.customize_Q45(
+            date_field=date_field, date_start=date_start, date_end=date_end,
+            tender_type=tender_type,
+            cpv_prefixes=cpv_prefixes, cpv_field=cpv_field,
+            budget_min=budget_min, budget_max=budget_max, budget_field=budget_field,
+            sme_field=sme_field,
+            subentidad=subentidad, cod_subentidad=cod_subentidad,
+            organo_id=organo_id, topic_model=topic_model,
+            topic_id=topic_id, topic_min_weight=topic_min_weight,
+            extra_fq=extra_fq,
+        )
+ 
+        labels:       List = []
+        pct_list:     List = []
+        cov_list:     List = []
+        n_lots_total: List = []
+        last_sc = 200
+ 
+        for q in queries:
+            label = q.pop("label")
+            q.pop("_meta")
+            params = {k: v for k, v in q.items() if k != "q"}
+ 
+            self.logger.info(f"do_Q45 | bim={label} | tender_type={tender_type}")
+ 
+            sc, results = self.execute_query(q=q["q"], col_name=_PLACE_COL, **params)
+            if sc != 200:
+                self.logger.error(f"do_Q45: Solr returned {sc} for bimester '{label}'")
+                last_sc = sc
+                labels.append(label); pct_list.append(None)
+                cov_list.append(None); n_lots_total.append(None)
+                continue
+ 
+            total = with_value = sme_lots = 0
+            for doc in results.docs:
+                lots = _parse_lot_int_values(doc.get(sme_field))
+                if not lots:
+                    # Document without the field – skip (no observation)
+                    continue
+                for val in lots:
+                    total += 1
+                    if val is not None:
+                        with_value += 1
+                        if val >= 1:
+                            sme_lots += 1
+ 
+            labels.append(label)
+            cov_list.append(_safe(with_value / total * 100) if total > 0 else None)
+            pct_list.append(_safe(sme_lots / with_value * 100) if with_value > 0 else None)
+            n_lots_total.append(total)
+ 
+        result = {
+            "id":              "sme_participation",
+            "bimester_labels": labels,
+            "pct_sme":         pct_list,
+            "coverage":        cov_list,
+            "n_lots_total":    n_lots_total,
+        }
+        return result, last_sc
+ 
+    # =========================================================================
+    # do_Q46 – SME offer ratio (sum(pyme_offers) / sum(total_offers))
+    # =========================================================================
+ 
+    def do_Q46(
+        self,
+        date_start:       str,
+        date_end:         str,
+        date_field:       str                 = "updated",
+        tender_type:      Optional[str]       = None,
+        cpv_prefixes:     Optional[List[str]] = None,
+        cpv_field:        str                 = "cpv_list",
+        budget_min:       Optional[float]     = None,
+        budget_max:       Optional[float]     = None,
+        budget_field:     str                 = "presupuesto_sin_iva",
+        sme_field:        str                 = "ofertas_pymes",
+        offers_field:     str                 = "ofertas_recibidas",
+        subentidad:       Optional[str]       = None,
+        cod_subentidad:   Optional[str]       = None,
+        organo_id:        Optional[str]       = None,
+        topic_model:      Optional[str]       = None,
+        topic_id:         Optional[str]       = None,
+        topic_min_weight: Optional[float]     = None,
+        extra_fq:         Optional[List[str]] = None,
+    ) -> Tuple[dict, int]:
+        """
+        Executes Q46 – SME offer ratio.
+ 
+        Computes sum(sme_offers) / sum(total_offers) per bimester, expressed
+        as a percentage, together with field coverage.
+ 
+        Returns
+        -------
+        (result, status_code)
+ 
+        result = {
+            "id":              "sme_offer_ratio",
+            "bimester_labels": ["Ene–Feb 2025", ...],
+            "pct_sme_offers":  [54.2, 55.8, ...],  # % of all offers from SMEs
+            "coverage":        [97.5, 97.8, ...],
+            "n_lots_total":    [4200, 5100, ...],
+        }
+        """
+        if not self.check_is_corpus(_PLACE_COL):
+            return {"error": f'"{_PLACE_COL}" is not a valid corpus collection'}, 400
+ 
+        queries = self.querier.customize_Q46(
+            date_field=date_field, date_start=date_start, date_end=date_end,
+            tender_type=tender_type,
+            cpv_prefixes=cpv_prefixes, cpv_field=cpv_field,
+            budget_min=budget_min, budget_max=budget_max, budget_field=budget_field,
+            sme_field=sme_field, offers_field=offers_field,
+            subentidad=subentidad, cod_subentidad=cod_subentidad,
+            organo_id=organo_id, topic_model=topic_model,
+            topic_id=topic_id, topic_min_weight=topic_min_weight,
+            extra_fq=extra_fq,
+        )
+ 
+        labels:       List = []
+        pct_list:     List = []
+        cov_list:     List = []
+        n_lots_total: List = []
+        last_sc = 200
+ 
+        for q in queries:
+            label = q.pop("label")
+            q.pop("_meta")
+            params = {k: v for k, v in q.items() if k != "q"}
+ 
+            self.logger.info(f"do_Q46 | bim={label} | tender_type={tender_type}")
+ 
+            sc, results = self.execute_query(q=q["q"], col_name=_PLACE_COL, **params)
+            if sc != 200:
+                self.logger.error(f"do_Q46: Solr returned {sc} for bimester '{label}'")
+                last_sc = sc
+                labels.append(label); pct_list.append(None)
+                cov_list.append(None); n_lots_total.append(None)
+                continue
+ 
+            total_lots = with_value = sum_sme = sum_total = 0
+            for doc in results.docs:
+                total_vals = _parse_lot_int_values(doc.get(offers_field))
+                sme_vals   = _parse_lot_int_values(doc.get(sme_field))
+                # Align both lists by position; zip stops at the shorter one
+                for t_val, s_val in zip(total_vals, sme_vals):
+                    total_lots += 1
+                    if t_val is not None and s_val is not None:
+                        with_value += 1
+                        sum_total  += t_val
+                        sum_sme    += s_val
+ 
+            labels.append(label)
+            cov_list.append(_safe(with_value / total_lots * 100) if total_lots > 0 else None)
+            pct_list.append(_safe(sum_sme / sum_total * 100) if sum_total > 0 else None)
+            n_lots_total.append(total_lots)
+ 
+        result = {
+            "id":              "sme_offer_ratio",
+            "bimester_labels": labels,
+            "pct_sme_offers":  pct_list,
+            "coverage":        cov_list,
+            "n_lots_total":    n_lots_total,
+        }
+        return result, last_sc
+ 
+    # =========================================================================
+    # do_Q47 – Lots division (% procedures with more than one lot)
+    # =========================================================================
+ 
+    def do_Q47(
+        self,
+        date_start:       str,
+        date_end:         str,
+        date_field:       str                 = "updated",
+        tender_type:      Optional[str]       = None,
+        cpv_prefixes:     Optional[List[str]] = None,
+        cpv_field:        str                 = "cpv_list",
+        budget_min:       Optional[float]     = None,
+        budget_max:       Optional[float]     = None,
+        budget_field:     str                 = "presupuesto_sin_iva",
+        lots_field:       str                 = "lotes",
+        subentidad:       Optional[str]       = None,
+        cod_subentidad:   Optional[str]       = None,
+        organo_id:        Optional[str]       = None,
+        topic_model:      Optional[str]       = None,
+        topic_id:         Optional[str]       = None,
+        topic_min_weight: Optional[float]     = None,
+        extra_fq:         Optional[List[str]] = None,
+    ) -> Tuple[dict, int]:
+        """
+        Executes Q47 – Lots division.
+ 
+        Returns the percentage of procedures that contain more than one lot,
+        together with field coverage (always 100 % if the field is indexed).
+ 
+        Returns
+        -------
+        (result, status_code)
+ 
+        result = {
+            "id":              "lots_division",
+            "bimester_labels": ["Ene–Feb 2025", ...],
+            "pct_multi_lot":   [8.3, 9.1, ...],   # % procedures with > 1 lot
+            "coverage":        [100.0, 100.0, ...],
+            "n_tenders":       [1200, 980, ...],
+        }
+        """
+        if not self.check_is_corpus(_PLACE_COL):
+            return {"error": f'"{_PLACE_COL}" is not a valid corpus collection'}, 400
+ 
+        queries = self.querier.customize_Q47(
+            date_field=date_field, date_start=date_start, date_end=date_end,
+            tender_type=tender_type,
+            cpv_prefixes=cpv_prefixes, cpv_field=cpv_field,
+            budget_min=budget_min, budget_max=budget_max, budget_field=budget_field,
+            lots_field=lots_field,
+            subentidad=subentidad, cod_subentidad=cod_subentidad,
+            organo_id=organo_id, topic_model=topic_model,
+            topic_id=topic_id, topic_min_weight=topic_min_weight,
+            extra_fq=extra_fq,
+        )
+ 
+        labels:    List = []
+        pct_list:  List = []
+        cov_list:  List = []
+        n_list:    List = []
+        last_sc = 200
+ 
+        for q in queries:
+            label = q.pop("label")
+            q.pop("_meta")
+            params = {k: v for k, v in q.items() if k != "q"}
+ 
+            self.logger.info(f"do_Q47 | bim={label} | tender_type={tender_type}")
+ 
+            sc, results = self.execute_query(q=q["q"], col_name=_PLACE_COL, **params)
+            if sc != 200:
+                self.logger.error(f"do_Q47: Solr returned {sc} for bimester '{label}'")
+                last_sc = sc
+                labels.append(label); pct_list.append(None)
+                cov_list.append(None); n_list.append(None)
+                continue
+ 
+            total = with_value = multi_lot = 0
+            for doc in results.docs:
+                total += 1
+                val = doc.get(lots_field)
+                if val is not None:
+                    with_value += 1
+                    # Field is stored as a list of lot strings
+                    n_lots = len(val) if isinstance(val, (list, tuple)) else 1
+                    if n_lots > 1:
+                        multi_lot += 1
+ 
+            labels.append(label)
+            cov_list.append(_safe(with_value / total * 100) if total > 0 else None)
+            pct_list.append(_safe(multi_lot / with_value * 100) if with_value > 0 else None)
+            n_list.append(total)
+ 
+        result = {
+            "id":              "lots_division",
+            "bimester_labels": labels,
+            "pct_multi_lot":   pct_list,
+            "coverage":        cov_list,
+            "n_tenders":       n_list,
+        }
+        return result, last_sc
+ 
+    # =========================================================================
+    # do_Q48 – Missing supplier ID
+    # =========================================================================
+ 
+    def do_Q48(
+        self,
+        date_start:        str,
+        date_end:          str,
+        date_field:        str                 = "updated",
+        tender_type:       Optional[str]       = None,
+        cpv_prefixes:      Optional[List[str]] = None,
+        cpv_field:         str                 = "cpv_list",
+        budget_min:        Optional[float]     = None,
+        budget_max:        Optional[float]     = None,
+        budget_field:      str                 = "presupuesto_sin_iva",
+        identifier_field:  str                 = "identificador",
+        subentidad:        Optional[str]       = None,
+        cod_subentidad:    Optional[str]       = None,
+        organo_id:         Optional[str]       = None,
+        topic_model:       Optional[str]       = None,
+        topic_id:          Optional[str]       = None,
+        topic_min_weight:  Optional[float]     = None,
+        extra_fq:          Optional[List[str]] = None,
+    ) -> Tuple[dict, int]:
+        """
+        Executes Q48 – Missing supplier ID.
+ 
+        For each awarded lot, checks whether a supplier identifier is present.
+        The field is stored as a list of "lot_id|type|value" strings; a lot is
+        considered to have a missing identifier when its value component is
+        empty or absent.
+ 
+        Returns
+        -------
+        (result, status_code)
+ 
+        result = {
+            "id":              "missing_supplier_id",
+            "bimester_labels": ["Ene–Feb 2025", ...],
+            "pct_missing":     [6.2, 5.8, ...],   # % lots without supplier id
+            "n_lots_total":    [4200, 5100, ...],
+        }
+        """
+        if not self.check_is_corpus(_PLACE_COL):
+            return {"error": f'"{_PLACE_COL}" is not a valid corpus collection'}, 400
+ 
+        queries = self.querier.customize_Q48(
+            date_field=date_field, date_start=date_start, date_end=date_end,
+            tender_type=tender_type,
+            cpv_prefixes=cpv_prefixes, cpv_field=cpv_field,
+            budget_min=budget_min, budget_max=budget_max, budget_field=budget_field,
+            identifier_field=identifier_field,
+            subentidad=subentidad, cod_subentidad=cod_subentidad,
+            organo_id=organo_id, topic_model=topic_model,
+            topic_id=topic_id, topic_min_weight=topic_min_weight,
+            extra_fq=extra_fq,
+        )
+ 
+        labels:   List = []
+        pct_list: List = []
+        n_list:   List = []
+        last_sc = 200
+ 
+        for q in queries:
+            label = q.pop("label")
+            q.pop("_meta")
+            params = {k: v for k, v in q.items() if k != "q"}
+ 
+            self.logger.info(f"do_Q48 | bim={label} | tender_type={tender_type}")
+ 
+            sc, results = self.execute_query(q=q["q"], col_name=_PLACE_COL, **params)
+            if sc != 200:
+                self.logger.error(f"do_Q48: Solr returned {sc} for bimester '{label}'")
+                last_sc = sc
+                labels.append(label); pct_list.append(None); n_list.append(None)
+                continue
+ 
+            total = missing = 0
+            for doc in results.docs:
+                raw = doc.get(identifier_field)
+                # Replicate notebook logic: skip docs without the field entirely
+                # (not yet awarded); only evaluate docs that have it.
+                if not isinstance(raw, (list, tuple)) or not raw:
+                    continue
+                for item in raw:
+                    total += 1
+                    try:
+                        # Solr stores as "lot_id|type|value".
+                        # null values from the parquet are serialised as the
+                        # string "None", so we treat "None" as missing too.
+                        parts = item.split("|")
+                        supplier_id = parts[2].strip() if len(parts) > 2 else None
+                        if supplier_id in (None, "", "None"):
+                            missing += 1
+                    except (AttributeError, IndexError):
+                        missing += 1
+ 
+            labels.append(label)
+            pct_list.append(_safe(missing / total * 100) if total > 0 else None)
+            n_list.append(total)
+ 
+        result = {
+            "id":              "missing_supplier_id",
+            "bimester_labels": labels,
+            "pct_missing":     pct_list,
+            "n_lots_total":    n_list,
+        }
+        return result, last_sc
+    
+    # =========================================================================
+    # do_Q49 – Missing buyer ID
+    # =========================================================================
+ 
+    def do_Q49(
+        self,
+        date_start:       str,
+        date_end:         str,
+        date_field:       str                 = "updated",
+        tender_type:      Optional[str]       = None,
+        cpv_prefixes:     Optional[List[str]] = None,
+        cpv_field:        str                 = "cpv_list",
+        budget_min:       Optional[float]     = None,
+        budget_max:       Optional[float]     = None,
+        budget_field:     str                 = "presupuesto_sin_iva",
+        buyer_id_field:   str                 = "organo_id",
+        subentidad:       Optional[str]       = None,
+        cod_subentidad:   Optional[str]       = None,
+        organo_id:        Optional[str]       = None,
+        topic_model:      Optional[str]       = None,
+        topic_id:         Optional[str]       = None,
+        topic_min_weight: Optional[float]     = None,
+        extra_fq:         Optional[List[str]] = None,
+    ) -> Tuple[dict, int]:
+        """
+        Executes Q49 – Missing buyer ID.
+ 
+        For each procedure, checks whether the contracting-authority identifier
+        (organo_id) is present and non-empty.
+ 
+        Returns
+        -------
+        (result, status_code)
+ 
+        result = {
+            "id":              "missing_buyer_id",
+            "bimester_labels": ["Ene–Feb 2025", ...],
+            "pct_missing":     [0.0, 0.1, ...],  # % procedures without buyer id
+            "n_tenders":       [1200, 980, ...],
+        }
+        """
+        if not self.check_is_corpus(_PLACE_COL):
+            return {"error": f'"{_PLACE_COL}" is not a valid corpus collection'}, 400
+ 
+        queries = self.querier.customize_Q49(
+            date_field=date_field, date_start=date_start, date_end=date_end,
+            tender_type=tender_type,
+            cpv_prefixes=cpv_prefixes, cpv_field=cpv_field,
+            budget_min=budget_min, budget_max=budget_max, budget_field=budget_field,
+            buyer_id_field=buyer_id_field,
+            subentidad=subentidad, cod_subentidad=cod_subentidad,
+            organo_id=organo_id, topic_model=topic_model,
+            topic_id=topic_id, topic_min_weight=topic_min_weight,
+            extra_fq=extra_fq,
+        )
+ 
+        labels:   List = []
+        pct_list: List = []
+        n_list:   List = []
+        last_sc = 200
+ 
+        for q in queries:
+            label = q.pop("label")
+            q.pop("_meta")
+            params = {k: v for k, v in q.items() if k != "q"}
+ 
+            self.logger.info(f"do_Q49 | bim={label} | tender_type={tender_type}")
+ 
+            sc, results = self.execute_query(q=q["q"], col_name=_PLACE_COL, **params)
+            if sc != 200:
+                self.logger.error(f"do_Q49: Solr returned {sc} for bimester '{label}'")
+                last_sc = sc
+                labels.append(label); pct_list.append(None); n_list.append(None)
+                continue
+ 
+            total = missing = 0
+            for doc in results.docs:
+                total += 1
+                val = doc.get(buyer_id_field)
+                if val is None or (isinstance(val, str) and not val.strip()):
+                    missing += 1
+ 
+            labels.append(label)
+            pct_list.append(_safe(missing / total * 100) if total > 0 else None)
+            n_list.append(total)
+ 
+        result = {
+            "id":              "missing_buyer_id",
+            "bimester_labels": labels,
+            "pct_missing":     pct_list,
+            "n_tenders":       n_list,
+        }
+        return result, last_sc
+ 
