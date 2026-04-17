@@ -1589,7 +1589,7 @@ class SIASolrClient(SolrClient):
     ) -> Union[dict,int]:
         """
         Executes query Q21.
-        
+
         Parameters
         ----------
         corpus_col: str
@@ -1600,7 +1600,17 @@ class SIASolrClient(SolrClient):
             Index of the first document to be retrieved
         rows: int
             Number of documents to be retrieved
-        
+        filter_query: str, optional
+            Pre-built Solr fq string to narrow results (e.g.
+            ``"updated:2024-01-01T00:00:00Z AND cpv_list:72000000"``).
+            Combined with any fq already present in the query using AND.
+        keyword: str, optional
+            If provided, combines the vector search with a BM25 keyword
+            match (Q21_e variant).
+        query_fields: str, optional
+            Solr fields to search with BM25 when ``keyword`` is set.
+            Defaults to ``"raw_text"``.
+
         Returns
         -------
         response: dict
@@ -1644,6 +1654,13 @@ class SIASolrClient(SolrClient):
             rows=rows
         )
         params = {k: v for k, v in q21.items() if k != 'q'}
+
+        if filter_query is not None:
+            existing_fq = params.get('fq')
+            if existing_fq:
+                params['fq'] = f"({existing_fq}) AND ({filter_query})"
+            else:
+                params['fq'] = filter_query
 
         sc, results = self.execute_query(
             q=q21['q'], col_name=corpus_col, **params)

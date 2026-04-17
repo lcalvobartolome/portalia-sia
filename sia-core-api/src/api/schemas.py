@@ -890,19 +890,49 @@ class MetadataFilter(BaseModel):
     """
     Optional metadata filters applicable to all search endpoints.
 
-    Allows narrowing results by year, CPV code, or any additional
+    Allows narrowing results by date, CPV code, or any additional
     key-value metadata.
+
+    Field mapping to Solr:
+    - ``date``  : ``updated`` (supports year, exact timestamp, or range)
+    - ``cpv``   : ``cpv_list`` (string, multivalued; prefix or exact code)
+    - ``extra`` : arbitrary indexed field names and their values (e.g., {"estado": "ADJ", "tender_type": "insiders"})
     """
-    year: Optional[int] = Field(None, description="Filter by publication year", ge=1900, le=2100)
-    cpv: Optional[str] = Field(None, description="Filter by CPV code (Common Procurement Vocabulary)")
+    date: Optional[str] = Field(
+        None,
+        description=(
+            "Filter by publication date. Accepted formats: "
+            "(1) 4-digit year (e.g. '2024'), which gets expanded to a full-year range automatically; "
+            "(2) exact ISO-8601 timestamp (e.g. '2024-06-15T00:00:00Z'); "
+            "(3) explicit Solr range expression "
+            "(e.g. '[2024-01-01T00:00:00Z TO 2024-12-31T23:59:59Z]'). "
+            "Maps to the 'updated' field in the index."
+        ),
+    )
+    cpv: Optional[str] = Field(
+        None,
+        description=(
+            "Filter by CPV code (Common Procurement Vocabulary). "
+            "Accepts an exact code (e.g. '72000000') or a prefix wildcard "
+            "(e.g. '72*'). Maps to the 'cpv_list' field in the index."
+        ),
+    )
     extra: Optional[Dict[str, str]] = Field(
         None,
-        description="Additional metadata key-value filters (e.g. {\"organization\": \"CSIC\"})"
+        description=(
+            "Additional metadata key-value filters against any indexed field. "
+            "Keys must be valid Solr field names; values are matched exactly "
+            "(e.g. {\"estado\": \"ADJ\", \"tender_type\": \"insiders\"})."
+        ),
     )
 
     class Config:
         json_schema_extra = {
-            "example": {"year": 2024, "cpv": "72000000", "extra": {"organization": "CSIC"}}
+            "example": {
+                "date": "2025",
+                "cpv": "72*",
+                "extra": {"estado": "ADJ", "tender_type": "insiders"},
+            }
         }
 
 
@@ -916,16 +946,9 @@ class SearchRequestBase(BaseModel):
     """
     Common fields shared by all search/similarity requests.
 
-    - ``filter_query``: raw Solr ``fq`` string for advanced users.
-    - ``filters``: structured metadata filters (year, CPV, extras).
+    - ``filters``: structured metadata filters (date, CPV, extras).
     - ``pagination``: start + rows.
-
-    Both ``filter_query`` and ``filters`` can be provided simultaneously;
-    the endpoint will combine them with AND.
     """
-    filter_query: Optional[str] = Field(
-        None, description="Raw Solr filter query (fq) for advanced filtering"
-    )
     filters: Optional[MetadataFilter] = Field(None, description="Structured metadata filters")
     pagination: SearchPagination = Field(default_factory=SearchPagination)
 
@@ -938,8 +961,7 @@ class SemanticSearchByTextRequest(SearchRequestBase):
         json_schema_extra = {
             "example": {
                 "query_text": "inteligencia artificial en contratación pública",
-                "filter_query": "source:TED",
-                "filters": {"year": 2024, "cpv": "72000000"},
+                "filters": {"date": "2024", "cpv": "72000000"},
                 "pagination": {"start": 0, "rows": 10}
             }
         }
@@ -955,7 +977,7 @@ class ThematicSearchByTextRequest(SearchRequestBase):
             "example": {
                 "query_text": "suministro de equipos informáticos",
                 "model_name": "topic_model_v1",
-                "filters": {"year": 2024},
+                "filters": {"date": "2024"},
                 "pagination": {"start": 0, "rows": 10}
             }
         }
@@ -976,7 +998,7 @@ class SimilarByDocumentRequest(SearchRequestBase):
             "example": {
                 "doc_ids": ["DOC-2024-001", "DOC-2024-042"],
                 "model_name": "topic_model_v1",
-                "filters": {"year": 2024},
+                "filters": {"date": "2024"},
                 "pagination": {"start": 0, "rows": 10}
             }
         }

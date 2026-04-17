@@ -81,31 +81,151 @@ def _require_tender_type(
 # ======================================================
 # Helper: build Solr filter query from MetadataFilter
 # ======================================================
+def _date_to_fq(date_value: str) -> str:
+    """
+    Convert a date value to a Solr ``updated`` fq clause.
+
+    Accepted formats:
+    - 4-digit year (``"2024"``) → range covering the full year.
+    - Any other string (ISO-8601 timestamp, Solr date-math expression,
+      explicit range ``[... TO ...]``) → passed through as-is.
+    """
+    if date_value.isdigit() and len(date_value) == 4:
+        return (
+            f"updated:[{date_value}-01-01T00:00:00Z"
+            f" TO {date_value}-12-31T23:59:59Z]"
+        )
+    return f"updated:{date_value}"
+
+
 def _build_filter_query(
-    filter_query: str | None,
     filters: MetadataFilter | None,
 ) -> str | None:
     """
-    Combine a raw Solr ``fq`` string with structured ``MetadataFilter``
-    into a single filter query.
+    Build a Solr ``fq`` string from a structured ``MetadataFilter``.
 
-    Returns ``None`` if neither is active.
+    Field mapping:
+    - ``date``  → ``updated`` (see ``_date_to_fq`` for accepted formats)
+    - ``cpv``   → ``cpv_list``
+    - ``extra`` → arbitrary indexed fields (passed through as-is)
+
+    Returns ``None`` if no filters are active.
     """
     parts: list[str] = []
 
-    if filter_query:
-        parts.append(filter_query)
-
     if filters is not None:
-        if filters.year is not None:
-            parts.append(f"year:{filters.year}")
+        if filters.date is not None:
+            parts.append(_date_to_fq(filters.date))
         if filters.cpv is not None:
-            parts.append(f"cpv:{filters.cpv}")
+            parts.append(f"cpv_list:{filters.cpv}")
         if filters.extra:
             for key, value in filters.extra.items():
                 parts.append(f"{key}:{value}")
 
     return " AND ".join(parts) if parts else None
+
+
+def _search_examples(*examples: tuple[str, str, dict]) -> dict:
+    """Return an openapi_extra dict with named request body examples."""
+    return {
+        "requestBody": {
+            "content": {
+                "application/json": {
+                    "examples": {
+                        name: {
+                            "summary": summary,
+                            "value": value,
+                        }
+                        for name, summary, value in examples
+                    }
+                }
+            }
+        }
+    }
+
+
+def _semantic_by_text_examples() -> dict:
+    """Examples for semantic search by free text."""
+    return _search_examples(
+        (
+            "AI procurement with filters",
+            "Semantic search with date, CPV and extra metadata filters",
+            {
+                "query_text": "inteligencia artificial en contratacion publica",
+                "filters": {
+                    "date": "2025",
+                    "cpv": "72*",
+                    "extra": {"tender_type": "insiders"},
+                },
+                "pagination": {"start": 0, "rows": 10},
+            },
+        ),
+        (
+            "Cybersecurity without filters",
+            "Semantic search using only the query text",
+            {
+                "query_text": "servicios de ciberseguridad y monitorizacion",
+                "pagination": {"start": 0, "rows": 5},
+            },
+        ),
+    )
+
+
+def _thematic_by_text_examples() -> dict:
+    """Examples for thematic similarity by free text."""
+    return _search_examples(
+        (
+            "IT supplies with model",
+            "Thematic similarity using a topic model and CPV/date filters",
+            {
+                "query_text": "suministro de equipos informaticos para centros publicos",
+                "model_name": "topic_model_v1",
+                "filters": {
+                    "date": "2024",
+                    "cpv": "30*",
+                },
+                "pagination": {"start": 0, "rows": 10},
+            },
+        ),
+    )
+
+
+def _semantic_by_document_examples() -> dict:
+    """Examples for semantic similarity by existing document IDs."""
+    return _search_examples(
+        (
+            "Two reference documents",
+            "Semantic similarity aggregated from two indexed documents",
+            {
+                "doc_ids": ["DOC-2025-001", "DOC-2025-042"],
+                "filters": {
+                    "date": "2025",
+                    "cpv": "72*",
+                },
+                "pagination": {"start": 0, "rows": 10},
+            },
+        ),
+    )
+
+
+def _thematic_by_document_examples() -> dict:
+    """Examples for thematic similarity by existing document IDs."""
+    return _search_examples(
+        (
+            "Thematic by document IDs",
+            "Thematic similarity using a topic model and two reference documents",
+            {
+                "doc_ids": ["DOC-2025-001", "DOC-2025-042"],
+                "model_name": "topic_model_v1",
+                "filters": {
+                    "date": "2025",
+                    "cpv": "72*",
+                    "extra": {"tender_type": "insiders"},
+                },
+                "pagination": {"start": 0, "rows": 10},
+            },
+        ),
+    )
 
 
 # ======================================================
@@ -179,6 +299,7 @@ async def get_corpus_metadata_fields(
         NotFoundException, SolrException,
         NotFoundException="Corpus not found",
     ),
+    openapi_extra=_semantic_by_text_examples(),
 )
 async def semantic_search_by_text(
     request: Request,
@@ -191,7 +312,7 @@ async def semantic_search_by_text(
         result = sc.do_Q21(
             corpus_col=corpus_collection,
             search_doc=body.query_text,
-            filter_query=_build_filter_query(body.filter_query, body.filters),
+            filter_query=_build_filter_query(body.filters),
             start=body.pagination.start,
             rows=body.pagination.rows,
         )
@@ -214,6 +335,7 @@ async def semantic_search_by_text(
         NotFoundException, SolrException,
         NotFoundException="Corpus or model not found",
     ),
+    openapi_extra=_thematic_by_text_examples(),
 )
 async def similar_docs_by_text_tm(
     request: Request,
@@ -227,7 +349,7 @@ async def similar_docs_by_text_tm(
             corpus_col=corpus_collection,
             model_name=body.model_name,
             text_to_infer=body.query_text,
-            filter_query=_build_filter_query(body.filter_query, body.filters),
+            filter_query=_build_filter_query(body.filters),
             start=body.pagination.start,
             rows=body.pagination.rows,
         )
@@ -253,6 +375,7 @@ async def similar_docs_by_text_tm(
         NotFoundException, SolrException,
         NotFoundException="Document, corpus or model not found",
     ),
+    openapi_extra=_semantic_by_document_examples(),
 )
 async def similar_documents_by_id(
     request: Request,
@@ -268,7 +391,7 @@ async def similar_documents_by_id(
             result = sc.do_Q21_by_doc(
                 corpus_col=corpus_collection,
                 doc_id=doc_id,
-                filter_query=_build_filter_query(body.filter_query, body.filters),
+                filter_query=_build_filter_query(body.filters),
                 start=body.pagination.start,
                 rows=body.pagination.rows,
             )
@@ -293,6 +416,7 @@ async def similar_documents_by_id(
         ValidationException="model_name is required for thematic similarity",
         NotFoundException="Document, corpus or model not found",
     ),
+    openapi_extra=_thematic_by_document_examples(),
 )
 async def similar_docs_by_doc_tm(
     request: Request,
@@ -311,7 +435,7 @@ async def similar_docs_by_doc_tm(
                 corpus_col=corpus_collection,
                 model_name=body.model_name,
                 doc_id=doc_id,
-                filter_query=_build_filter_query(body.filter_query, body.filters),
+                filter_query=_build_filter_query(body.filters),
                 start=body.pagination.start,
                 rows=body.pagination.rows,
             )
@@ -347,7 +471,7 @@ async def similar_docs_by_doc_tm(
 #        result = sc.do_Q30(
 #            corpus_col=corpus_collection,
 #            year=body.year,
-#            filter_query=_build_filter_query(body.filter_query, body.filters),
+#            filter_query=_build_filter_query(body.filters),
 #            start=body.pagination.start,
 #            rows=body.pagination.rows,
 #        )
