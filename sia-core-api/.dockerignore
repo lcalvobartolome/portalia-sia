@@ -1,0 +1,12 @@
+# Keep the build context small and deterministic so `COPY . .` cannot pull local
+# virtualenvs, caches or a stale Mallet checkout into the image (IDX-006 follow-up).
+.venv/
+**/__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+mallet-2.0.8/
+.git/
+.gitignore
+*.log

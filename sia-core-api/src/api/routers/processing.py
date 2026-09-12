@@ -41,6 +41,8 @@ from src.api.exceptions import (
     SolrException,
     ValidationException,
     error_responses,
+    raise_internal_processing,
+    raise_internal_solr,
 )
 from src.api.schemas import (
     BatchProcessingResponse,
@@ -394,7 +396,7 @@ async def index_corpus(
     except APIException:
         raise
     except Exception as e:
-        raise ProcessingException(str(e))
+        raise_internal_processing(e, log=logger)
 
 
 @router.delete(
@@ -418,7 +420,7 @@ async def delete_corpus(
     except APIException:
         raise
     except Exception as e:
-        raise ProcessingException(str(e))
+        raise_internal_processing(e, log=logger)
 
 
 # ======================================================
@@ -730,7 +732,7 @@ async def get_pipeline_progress(
     try:
         progress = _compute_progress(data_dir, mtime_snapshot)
     except Exception as e:
-        raise ProcessingException(f"Error computing progress: {e}")
+        raise_internal_processing(e, context="compute_progress", log=logger)
 
     return PipelineProgressResponse(
         job_id=job_id,
@@ -768,7 +770,7 @@ async def list_all_corpora(
     except APIException:
         raise
     except Exception as e:
-        raise SolrException(str(e))
+        raise_internal_solr(e, log=logger)
 
 
 # @router.get(

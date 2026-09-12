@@ -19,6 +19,8 @@ Date: 27/03/2023
 Modified: 04/02/2026 (Migrated to FastAPI and reorganized)
 """
 
+import logging
+
 from fastapi import APIRouter, Body, Path, Query, Request  # type: ignore
 
 from src.api.schemas import (
@@ -37,7 +39,10 @@ from src.api.exceptions import (
     NotFoundException,
     ValidationException,
     error_responses,
+    raise_internal_solr,
 )
+
+logger = logging.getLogger("SIA-Core-API.exploitation")
 
 router = APIRouter(
     prefix="/exploitation",
@@ -298,7 +303,7 @@ async def get_document_metadata(
     except APIException:
         raise
     except Exception as e:
-        raise SolrException(str(e))
+        raise_internal_solr(e, log=logger)
 
 
 @router.get(
@@ -323,7 +328,7 @@ async def get_corpus_metadata_fields(
     except APIException:
         raise
     except Exception as e:
-        raise SolrException(str(e))
+        raise_internal_solr(e, log=logger)
 
 
 # ======================================================
@@ -362,7 +367,7 @@ async def semantic_search_by_text(
     except APIException:
         raise
     except Exception as e:
-        raise SolrException(str(e))
+        raise_internal_solr(e, log=logger)
 
 
 # @router.post(
@@ -452,7 +457,7 @@ async def similar_documents_by_id(
     except APIException:
         raise
     except Exception as e:
-        raise SolrException(str(e))
+        raise_internal_solr(e, log=logger)
 
 
 # @router.post(
@@ -706,12 +711,13 @@ async def calculate_indicator_total_procurement(
             topic_min_weight = body.topic_min_weight,
         )
         if status != 200:
-            raise SolrException(result.get("error", "Solr query failed"))
+            logger.error("Solr indicator query failed (status=%s): %s", status, result.get("error"))
+            raise SolrException("Solr query failed")
         return DataResponse(success=True, data=result)
     except APIException:
         raise
     except Exception as e:
-        raise SolrException(str(e))
+        raise_internal_solr(e, log=logger)
 
 @router.post(
     "/indicators/single-bidder",
@@ -747,12 +753,13 @@ async def calculate_indicator_single_bidder(
             topic_min_weight = body.topic_min_weight,
         )
         if status != 200:
-            raise SolrException(result.get("error", "Solr query failed"))
+            logger.error("Solr indicator query failed (status=%s): %s", status, result.get("error"))
+            raise SolrException("Solr query failed")
         return DataResponse(success=True, data=result)
     except APIException:
         raise
     except Exception as e:
-        raise SolrException(str(e))
+        raise_internal_solr(e, log=logger)
 
 
 @router.post(
@@ -789,12 +796,13 @@ async def calculate_indicator_decision_speed(
             topic_min_weight = body.topic_min_weight,
         )
         if status != 200:
-            raise SolrException(result.get("error", "Solr query failed"))
+            logger.error("Solr indicator query failed (status=%s): %s", status, result.get("error"))
+            raise SolrException("Solr query failed")
         return DataResponse(success=True, data=result)
     except APIException:
         raise
     except Exception as e:
-        raise SolrException(str(e))
+        raise_internal_solr(e, log=logger)
 
 
 @router.post(
@@ -831,12 +839,13 @@ async def calculate_indicator_direct_awards(
             topic_min_weight = body.topic_min_weight,
         )
         if status != 200:
-            raise SolrException(result.get("error", "Solr query failed"))
+            logger.error("Solr indicator query failed (status=%s): %s", status, result.get("error"))
+            raise SolrException("Solr query failed")
         return DataResponse(success=True, data=result)
     except APIException:
         raise
     except Exception as e:
-        raise SolrException(str(e))
+        raise_internal_solr(e, log=logger)
 
 
 @router.post(
@@ -872,12 +881,13 @@ async def calculate_indicator_ted_publication(
             topic_min_weight = body.topic_min_weight,
         )
         if status != 200:
-            raise SolrException(result.get("error", "Solr query failed"))
+            logger.error("Solr indicator query failed (status=%s): %s", status, result.get("error"))
+            raise SolrException("Solr query failed")
         return DataResponse(success=True, data=result)
     except APIException:
         raise
     except Exception as e:
-        raise SolrException(str(e))
+        raise_internal_solr(e, log=logger)
 
 
 @router.post(
@@ -915,12 +925,13 @@ async def calculate_indicator_sme_participation(
             topic_min_weight = body.topic_min_weight,
         )
         if status != 200:
-            raise SolrException(result.get("error", "Solr query failed"))
+            logger.error("Solr indicator query failed (status=%s): %s", status, result.get("error"))
+            raise SolrException("Solr query failed")
         return DataResponse(success=True, data=result)
     except APIException:
         raise
     except Exception as e:
-        raise SolrException(str(e))
+        raise_internal_solr(e, log=logger)
 
 
 @router.post(
@@ -958,12 +969,13 @@ async def calculate_indicator_sme_offer_ratio(
             topic_min_weight = body.topic_min_weight,
         )
         if status != 200:
-            raise SolrException(result.get("error", "Solr query failed"))
+            logger.error("Solr indicator query failed (status=%s): %s", status, result.get("error"))
+            raise SolrException("Solr query failed")
         return DataResponse(success=True, data=result)
     except APIException:
         raise
     except Exception as e:
-        raise SolrException(str(e))
+        raise_internal_solr(e, log=logger)
 
 
 @router.post(
@@ -1000,12 +1012,13 @@ async def calculate_indicator_lots_division(
             topic_min_weight = body.topic_min_weight,
         )
         if status != 200:
-            raise SolrException(result.get("error", "Solr query failed"))
+            logger.error("Solr indicator query failed (status=%s): %s", status, result.get("error"))
+            raise SolrException("Solr query failed")
         return DataResponse(success=True, data=result)
     except APIException:
         raise
     except Exception as e:
-        raise SolrException(str(e))
+        raise_internal_solr(e, log=logger)
 
 
 @router.post(
@@ -1042,12 +1055,13 @@ async def calculate_indicator_missing_supplier_id(
             topic_min_weight = body.topic_min_weight,
         )
         if status != 200:
-            raise SolrException(result.get("error", "Solr query failed"))
+            logger.error("Solr indicator query failed (status=%s): %s", status, result.get("error"))
+            raise SolrException("Solr query failed")
         return DataResponse(success=True, data=result)
     except APIException:
         raise
     except Exception as e:
-        raise SolrException(str(e))
+        raise_internal_solr(e, log=logger)
 
 
 @router.post(
@@ -1084,9 +1098,10 @@ async def calculate_indicator_missing_buyer_id(
             topic_min_weight = body.topic_min_weight,
         )
         if status != 200:
-            raise SolrException(result.get("error", "Solr query failed"))
+            logger.error("Solr indicator query failed (status=%s): %s", status, result.get("error"))
+            raise SolrException("Solr query failed")
         return DataResponse(success=True, data=result)
     except APIException:
         raise
     except Exception as e:
-        raise SolrException(str(e))
+        raise_internal_solr(e, log=logger)

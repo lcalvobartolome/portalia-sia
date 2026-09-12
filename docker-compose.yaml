@@ -1,30 +1,35 @@
 networks:
   sia-net:
     name: sia-net
+
 services:
   sia-core-api:
+    container_name: sia-core-api
+    image: sia-core-api:latest
     build:
       context: ./sia-core-api
       args:
-        GITHUB_TOKEN: ${GITHUB_TOKEN}
-    image: sia-core-api:latest
-    container_name: sia-core-api
+        APP_UID: ${APP_UID:-1000}
+        APP_GID: ${APP_GID:-1000}
+        PIPELINE_REF: ${PIPELINE_REF:-main}
+      secrets:
+        - github_token
+    depends_on:
+      - solr
     ports:
       - 10083:10083
+    volumes:
+      - ./data/:/mnt/data
+      - ./sia-config:/config
+      - ./db/data/sqlite3/pipeline_jobs.db:/data/pipeline_jobs.db
     environment:
       #NVIDIA_DRIVER_CAPABILITIES: compute,utility # needed in Lt2
       SOLR_URL: http://solr:8983
       SIA_MASTER_KEY: ${SIA_MASTER_KEY:-master-key-change-in-production}
       API_KEYS_FILE: /config/api_keys.json
       CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:3000,http://localhost:8080}
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
-    depends_on:
-      - solr
-    volumes:
-      - ./data/:/mnt/data
-      - ./sia-config:/config
-      - ./db/data/sqlite3/pipeline_jobs.db:/data/pipeline_jobs.db
+    cap_drop:
+      - ALL
     deploy:
       resources:
         limits:
@@ -36,18 +41,40 @@ services:
         #      device_ids: ["2"]
         #      capabilities: [gpu]
 
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+    security_opt:
+      - no-new-privileges:true
+    user: "${APP_UID:-1000}:${APP_GID:-1000}"
+    networks:
+      - sia-net
+
   solr:
+    container_name: sia-solr
+    image: sia-solr:9.1.1
     build:
       context: ./solr-plugins/NP-solr-dist-plugin
-    image: sia-solr:9.1.1
-    container_name: sia-solr
     restart: always
+    ports:
+      - 10085:8983
     volumes:
       - ./db/data/solr:/var/solr
       - ./solr-config:/opt/solr/server/solr
       - ./solr-config/solr.in.sh:/etc/default/solr.in.sh
-    ports:
-      - 10085:8983
+    environment:
+      - SOLR_OPTS=-Dsolr.jetty.request.header.size=65535
+      - SOLR_JAVA_MEM=-Xms1g -Xmx1g
+    networks:
+      - sia-net
+    deploy:
+      resources:
+        limits:
+          memory: 100GB
     entrypoint:
       - docker-entrypoint.sh
       - solr
@@ -58,66 +85,40 @@ services:
       - zoo:2181
       - -a
       - "-Xdebug -Xrunjdwp:transport=dt_socket,server=y,suspend=n,address=1044 -Djute.maxbuffer=0x5000000"
-    environment:
-      - SOLR_OPTS=-Dsolr.jetty.request.header.size=65535
-      - SOLR_JAVA_MEM=-Xms1g -Xmx1g
-    #networks:
-    #  - np-net
-    deploy:
-      resources:
-        limits:
-          memory: 100GB
-
-  solr-config:
-    build: ./solr-config
-    image: sia-solr-config:latest
-    container_name: sia-solr-config
-    ports:
-      - 10088:81
-    depends_on:
-      - solr
-      - zoo
-    #networks:
-    #  - np-net
-    volumes:
-      - /var/run/docker.sock:/var/run/docker.sock
-      - ./solr-config/bash_scripts:/bash_scripts
-      - ./db/data/solr:/db/data/solr
-    command:
-      - sh
-      - -c
-      - "chmod +x /bash_scripts/init_config.sh && ls /bash_scripts && bash_scripts/init_config.sh /db/data/solr/data"
-    deploy:
-      resources:
-        limits:
-          memory: 100GB
-
-  solr-initializer:
-    image: alpine
-    container_name: sia-solr-initializer
-    restart: "no"
-    entrypoint: |
-      /bin/sh -c "chown 8983:8983 /solr"
-    #networks:
-    #  - np-net
-    volumes:
-      - ./db/data/solr:/solr
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+    security_opt:
+      - no-new-privileges:true
 
   zoo:
-    image: zookeeper
     container_name: sia-zoo
+    image: zookeeper@sha256:4c6f15fbd5491a3e01b0108c046891125553329a4956848ba3014cedff5386ee
     restart: always
     ports:
       - 10086:8080
       - 10087:2181
-    environment:
-      - JVMFLAGS=-Djute.maxbuffer=50000000
     volumes:
       - ./db/data/zoo/data:/data
       - ./db/data/zoo/logs:/datalog
-    #networks:
-    #  - np-net
+    environment:
+      - JVMFLAGS=-Djute.maxbuffer=50000000
+    networks:
+      - sia-net
     deploy:
       resources:
         limits:
           memory: 100GB
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+    security_opt:
+      - no-new-privileges:true
+
+secrets:
+  github_token:
+    environment: GITHUB_TOKEN

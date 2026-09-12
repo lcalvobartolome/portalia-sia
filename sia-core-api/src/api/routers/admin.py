@@ -17,6 +17,8 @@ Date: 27/03/2023
 Modified: 04/02/2026 (Migrated to FastAPI and reorganized)
 """
 
+import logging
+
 from fastapi import APIRouter, Depends, Request, Path, Body # type: ignore
 from src.api.schemas import (
     CollectionCreateRequest,
@@ -34,6 +36,7 @@ from src.api.exceptions import (
     UnauthorizedException,
     ValidationException,
     error_responses,
+    raise_internal_solr,
 )
 from src.api.auth import (
     api_key_manager,
@@ -47,6 +50,8 @@ from src.api.auth import (
 # ======================================================
 # Router
 # ======================================================
+logger = logging.getLogger("SIA-Core-API.admin")
+
 router = APIRouter(
     prefix="/admin",
     tags=["1. Infrastructure Administration"],
@@ -88,7 +93,7 @@ async def create_collection(
     except APIException:
         raise
     except Exception as e:
-        raise SolrException(str(e))
+        raise_internal_solr(e, log=logger)
 
 
 @router.delete(
@@ -117,7 +122,7 @@ async def delete_collection(
     except APIException:
         raise
     except Exception as e:
-        raise SolrException(str(e))
+        raise_internal_solr(e, log=logger)
 
 
 @router.get(
@@ -143,7 +148,7 @@ async def list_collections(
     except APIException:
         raise
     except Exception as e:
-        raise SolrException(str(e))
+        raise_internal_solr(e, log=logger)
 
 
 @router.get(
@@ -185,7 +190,7 @@ async def execute_raw_query(
     except APIException:
         raise
     except Exception as e:
-        raise SolrException(str(e))
+        raise_internal_solr(e, log=logger)
 
 
 # ======================================================

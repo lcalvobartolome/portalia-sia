@@ -5,9 +5,26 @@ Author: Lorena Calvo-Bartolomé
 Date: 04/02/2026 (Migrated to FastAPI)
 """
 
+import logging
+import uuid
+
 from fastapi import FastAPI, HTTPException, Request # type: ignore
 from fastapi.responses import JSONResponse # type: ignore
 from typing import Any, Dict, Optional, Type
+
+logger = logging.getLogger("SIA-Core-API.errors")
+
+_INTERNAL_ERROR_MESSAGE = "An internal error occurred. Contact support with the correlation id."
+
+
+def _sanitized_500(correlation_id: str, error_code: str = "INTERNAL_ERROR") -> Dict[str, Any]:
+    """Body returned to the client for server-side (5xx) failures."""
+    return {
+        "success": False,
+        "error": _INTERNAL_ERROR_MESSAGE,
+        "error_code": error_code,
+        "details": {"correlation_id": correlation_id},
+    }
 
 
 # ======================================================
@@ -17,14 +34,9 @@ class APIException(HTTPException):
     """
     Base class for every custom API exception.
 
-    Subclasses fix "status_code" and "error_code" as class-level
-    defaults; callers only provide the human-readable message and,
-    optionally, a details dict.
+    Subclasses fix "status_code" and "error_code" as class-level defaults callers only provide the human-readable message and, optionally, a details dict.
 
-    The "detail" field (inherited from HTTPException) is set to the
-    full ErrorResponse (shaped dict so that even without custom
-    exception handlers FastAPI's default HTTPException handler
-    produces the correct JSON body::
+    The "detail" field (inherited from HTTPException) is set to the full ErrorResponse (shaped dict so that even without custom exception handlers FastAPI's default HTTPException handler produces the correct JSON body::
 
         {
             "success": false,
@@ -63,14 +75,14 @@ class APIException(HTTPException):
         Generate a Swagger/OpenAPI response spec from this exception class.
 
         Returns a dict suitable for use as a value in FastAPI's
-        ``responses`` parameter::
+        responses parameter::
 
             @router.get("/...", responses={
                 **NotFoundException.response_spec("Corpus not found"),
             })
 
         The key is the HTTP status code; the value includes a
-        representative example derived from ``error_code``.
+        representative example derived from error_code.
         """
         desc = description or cls.error_code.replace("_", " ").title()
         return {
@@ -231,6 +243,33 @@ class SolrException(APIException):
 
 
 # ======================================================
+# Sanitized re-raise helpers (IDX-001)
+# ======================================================
+# Call these from an except block: the active exception (message, stack,
+# any internal paths/identifiers it carries) is written to the server log only,
+# and a fixed, non-revealing message is raised toward the client.
+
+def raise_internal_solr(
+    exc: BaseException, context: str = "", log: Optional[logging.Logger] = None
+) -> "None":
+    """Log the real Solr failure server-side, raise a sanitized SolrException."""
+    (log or logger).exception(
+        "Solr operation failed%s", f": {context}" if context else ""
+    )
+    raise SolrException("Solr operation failed") from exc
+
+
+def raise_internal_processing(
+    exc: BaseException, context: str = "", log: Optional[logging.Logger] = None
+) -> "None":
+    """Log the real processing failure server-side, raise a sanitized ProcessingException."""
+    (log or logger).exception(
+        "Processing operation failed%s", f": {context}" if context else ""
+    )
+    raise ProcessingException("operation failed") from exc
+
+
+# ======================================================
 # Response-spec helper
 # ======================================================
 def error_responses(
@@ -238,7 +277,7 @@ def error_responses(
     **descriptions: str,
 ) -> Dict[int, dict]:
     """
-    Build a combined ``responses`` dict from one or more exception classes.
+    Build a combined responses dict from one or more exception classes.
 
     Usage::
 
@@ -256,7 +295,7 @@ def error_responses(
         )
 
     When two exception classes share the same status code (e.g.
-    ``SolrException`` and ``ProcessingException`` are both 500),
+    SolrException and ProcessingException are both 500),
     their descriptions are joined with " | ".
     """
     result: Dict[int, dict] = {}
@@ -278,11 +317,23 @@ def error_responses(
 # ======================================================
 async def _api_exception_handler(request: Request, exc: APIException) -> JSONResponse:
     """
-    Handler for custom ``APIException`` subclasses.
+    Handler for custom APIException subclasses.
 
-    Extracts the structured fields and returns a JSON body that matches
-    the ``ErrorResponse`` schema.
+    4xx responses keep their (controlled, business-level) message. For 5xx the
+    message and details are logged server-side only and the client gets a
+    generic body plus a correlation id (IDX-001).
     """
+    if exc.status_code >= 500:
+        correlation_id = str(uuid.uuid4())
+        logger.error(
+            "[%s] %s %s -> %s: %s | details=%s",
+            correlation_id, request.method, request.url.path,
+            exc.error_code_instance, exc.error, exc.details,
+        )
+        return JSONResponse(
+            status_code=exc.status_code,
+            content=_sanitized_500(correlation_id, exc.error_code_instance),
+        )
     return JSONResponse(
         status_code=exc.status_code,
         content={
@@ -299,12 +350,23 @@ async def _http_exception_handler(request: Request, exc: HTTPException) -> JSONR
     Catch-all for any HTTPException that is not an
     APIException (e.g. FastAPI's own 422 validation errors).
     """
+    if exc.status_code >= 500:
+        correlation_id = str(uuid.uuid4())
+        logger.error(
+            "[%s] %s %s -> HTTP %s: %s",
+            correlation_id, request.method, request.url.path,
+            exc.status_code, exc.detail,
+        )
+        return JSONResponse(
+            status_code=exc.status_code,
+            content=_sanitized_500(correlation_id),
+        )
     return JSONResponse(
         status_code=exc.status_code,
         content={
             "success": False,
             "error": str(exc.detail),
-            "error_code": "BAD_REQUEST" if exc.status_code < 500 else "INTERNAL_ERROR",
+            "error_code": "BAD_REQUEST",
             "details": None,
         },
     )
@@ -312,16 +374,17 @@ async def _http_exception_handler(request: Request, exc: HTTPException) -> JSONR
 
 async def _generic_exception_handler(request: Request, exc: Exception) -> JSONResponse:
     """
-    Last-resort handler for completely unhandled exceptions.
+    Last-resort handler for completely unhandled exceptions. The full traceback
+    is logged server-side; the client only receives a correlation id (IDX-001).
     """
+    correlation_id = str(uuid.uuid4())
+    logger.exception(
+        "[%s] unhandled exception on %s %s",
+        correlation_id, request.method, request.url.path,
+    )
     return JSONResponse(
         status_code=500,
-        content={
-            "success": False,
-            "error": "An unexpected error occurred",
-            "error_code": "INTERNAL_ERROR",
-            "details": {"exception_type": type(exc).__name__},
-        },
+        content=_sanitized_500(correlation_id),
     )
 
 

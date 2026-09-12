@@ -13,9 +13,11 @@ Usage
 """
 
 import argparse
+import logging
 import os
-import sys
 from typing import Optional
+
+logger = logging.getLogger("plot_indicators")
 
 import matplotlib
 matplotlib.use("Agg")
@@ -74,7 +76,9 @@ def _post(base_url: str, endpoint: str, payload: dict,
     resp.raise_for_status()
     body = resp.json()
     if not body.get("success"):
-        raise RuntimeError(f"API error from {endpoint}: {body}")
+        # Do not surface the full response body (may carry internal paths/data); log it for debugging only.
+        logger.debug("API error body from %s: %s", endpoint, body)
+        raise RuntimeError(f"API error from {endpoint} (HTTP {resp.status_code})")
     return body["data"]
 
 
@@ -274,8 +278,9 @@ def fetch_and_plot(args):
             try:
                 result[src] = _post(base, endpoint,
                                     _build_payload(ds, de, df, src, cpvs), key)
-            except Exception as exc:
-                print(f"  WARNING {endpoint}/{src}: {exc}", file=sys.stderr)
+            except Exception:
+                logger.warning("request to %s (%s) failed", endpoint, src)
+                logger.debug("detail", exc_info=True)
                 result[src] = None
         return result
 
@@ -283,8 +288,9 @@ def fetch_and_plot(args):
         try:
             return _post(base, endpoint,
                          _build_payload(ds, de, df, tender_type, cpvs), key)
-        except Exception as exc:
-            print(f"  WARNING {endpoint}: {exc}", file=sys.stderr)
+        except Exception:
+            logger.warning("request to %s failed", endpoint)
+            logger.debug("detail", exc_info=True)
             return None
 
     print("Fetching data from API …")
@@ -406,4 +412,8 @@ def _parse_args():
 
 
 if __name__ == "__main__":
+    logging.basicConfig(
+        level=os.environ.get("PLOT_INDICATORS_LOGLEVEL", "INFO"),
+        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+    )
     fetch_and_plot(_parse_args())

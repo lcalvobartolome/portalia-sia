@@ -304,8 +304,11 @@ class Corpus(object):
                     schema_names = set(pq.read_schema(f).names)
                     cols_to_read = list(COLS_NEEDED & schema_names)
                     batch_dfs.append(pd.read_parquet(f, columns=cols_to_read))
-                except Exception as e:
-                    self._logger.warning(f"  Skipping corrupt parquet file '{f.name}': {e}")
+                except Exception:
+                    # Log the file name only, not the exception text (IDX-001);
+                    # keep the parser detail at DEBUG for troubleshooting.
+                    self._logger.warning("Skipping corrupt parquet file '%s'", f.name)
+                    self._logger.debug("parquet read error detail", exc_info=True)
             if batch_dfs:
                 chunks.append(pd.concat(batch_dfs, ignore_index=True))
                 del batch_dfs

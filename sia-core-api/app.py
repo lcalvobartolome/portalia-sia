@@ -71,8 +71,9 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         app.state.solr_client = SIASolrClient(
             logger, config_file=str(config_path))
         logger.info("Solr client initialized successfully")
-    except Exception as e:
-        logger.error(f"Error initializing Solr client: {e}")
+    except Exception:
+        # Full detail to the server log only (IDX-001); startup still fails hard.
+        logger.exception("Error initializing Solr client")
         raise
 
     init_db()
