@@ -87,7 +87,7 @@ class BatchProcessingResponse(ResponseBase):
         json_schema_extra = {
             "example": {
                 "success": True,
-                "message": "Extract pipeline started for tipo='insiders' (data_dir=/mnt/data/2025_26/metadata/test_transalte_14_abril/insiders)",
+                "message": "Extract pipeline started for tipo='insiders' (data_dir=/mnt/data_place/2025_26/metadata/test_transalte_14_abril/insiders)",
                 "job_id": "extract_a1b2c3d4",
                 "status": "running"
             }
@@ -403,7 +403,7 @@ class IndicatorRequest(BaseModel):
 # ======================================================
 class ExtractPipelineRequest(BaseModel):
     """Parameters for the extract and infer pipeline modes."""
-    base_dir: str = Field(..., description="Base directory, e.g. /mnt/data/2025_26")
+    base_dir: str = Field(..., description="Base directory, e.g. /mnt/data_place/2025_26")
     tipo: Literal["minors", "outsiders", "insiders"] = Field(
         ..., description="Document type to process"
     )
@@ -421,7 +421,7 @@ class ExtractPipelineRequest(BaseModel):
     class Config:
         json_schema_extra = {
             "example": {
-                "base_dir": "/mnt/data/2025_26",
+                "base_dir": "/mnt/data_place/2025_26",
                 "tipo": "insiders",
                 "calculate_on": "texto_traducido",
                 "llm_model_gen": "qwen3:32b",
@@ -437,7 +437,7 @@ class ExtractPipelineRequest(BaseModel):
 
 class TrainPipelineRequest(BaseModel):
     """Parameters for the train pipeline mode."""
-    base_dir: str = Field(..., description="Base directory, e.g. /mnt/data/2025_26")
+    base_dir: str = Field(..., description="Base directory, e.g. /mnt/data_place/2025_26")
     train_tipos: str = Field(
         ...,
         description='Colon-separated tipos to train, e.g. "minors:outsiders:insiders"',
@@ -449,7 +449,7 @@ class TrainPipelineRequest(BaseModel):
     class Config:
         json_schema_extra = {
             "example": {
-                "base_dir": "/mnt/data/2025_26",
+                "base_dir": "/mnt/data_place/2025_26",
                 "train_tipos": "minors:outsiders:insiders",
                 "ntopics": 25,
                 "num_iterations": 1000,
@@ -478,7 +478,7 @@ class PipelineJobStatus(BaseModel):
                 "started_at": "2026-04-20T10:00:00",
                 "finished_at": None,
                 "returncode": None,
-                "data_dir": "/mnt/data/2025_26/metadata/test_transalte_14_abril/insiders",
+                "data_dir": "/mnt/data_place/2025_26/metadata/test_transalte_14_abril/insiders",
             }
         }
 
@@ -502,7 +502,7 @@ class PipelineProgressResponse(BaseModel):
                 "tipo": "insiders",
                 "status": "running:nlp-process",
                 "started_at": "2026-04-20T10:00:00",
-                "data_dir": "/mnt/data/2025_26/metadata/test_transalte_14_abril/insiders",
+                "data_dir": "/mnt/data_place/2025_26/metadata/test_transalte_14_abril/insiders",
                 "files_total": 120,
                 "files_modified": 45,
                 "by_day": [

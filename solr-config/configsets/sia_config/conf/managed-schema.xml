@@ -166,6 +166,39 @@
  <field name="keyword_counts" type="text_general" indexed="true" stored="true" multiValued="false" />
  <field name="total_keyword_count" type="pint" indexed="true" stored="true" multiValued="false" />
 
+  <!-- Metadata BDNS  -->
+  <field name="codigo_bdns" type="string" indexed="true" stored="true" required="false" multiValued="false" />
+  <field name="url_convocatoria" type="string" indexed="true" stored="true" required="false" multiValued="false" />
+  <field name="descripcion" type="text_es" indexed="true" stored="true" multiValued="false" />
+  <field name="descripcion_norm" type="string" indexed="false" stored="true" required="false" multiValued="false" />
+  <field name="descripcion_leng" type="string" indexed="false" stored="true" required="false" multiValued="false" />
+  <field name="bases_reguladoras" type="text_es" indexed="true" stored="true" multiValued="false" />
+  <field name="url_bases_reguladoras" type="string" indexed="true" stored="true" required="false" multiValued="false" />
+  <field name="sede_electronica" type="string" indexed="true" stored="true" required="false" multiValued="false" />
+  <field name="organo_ambito" type="string" indexed="true" stored="true" required="false" multiValued="false" />
+  <field name="organo_entidad" type="string" indexed="true" stored="true" required="false" multiValued="false" />
+  <field name="organo_unidad" type="string" indexed="true" stored="true" required="false" multiValued="false" />
+  <field name="finalidad" type="string" indexed="true" stored="true" required="false" multiValued="false" />
+  <field name="tipo_convocatoria" type="string" indexed="true" stored="true" required="false" multiValued="false" />
+  <field name="sectores" type="string" indexed="true" stored="true" required="false" multiValued="true" />
+  <field name="sector_seccion" type="string" indexed="true" stored="true" required="false" multiValued="true" />
+  <field name="sector_detalle" type="string" indexed="true" stored="true" required="false" multiValued="true" />
+  <field name="regiones" type="string" indexed="true" stored="true" required="false" multiValued="true" />
+  <field name="tipos_beneficiarios" type="string" indexed="true" stored="true" required="false" multiValued="true" />
+  <field name="mrr" type="boolean" indexed="true" stored="true" required="false" multiValued="false" />
+  <field name="fecha_registro" type="pdate" indexed="true" stored="true" multiValued="false" />
+  <field name="fecha_inicio_solicitud" type="pdate" indexed="true" stored="true" multiValued="false" />
+  <field name="fecha_fin_solicitud" type="pdate" indexed="true" stored="true" multiValued="false" />
+  <field name="texto_inicio" type="text_es" indexed="true" stored="true" multiValued="false" />
+  <field name="texto_fin" type="text_es" indexed="true" stored="true" multiValued="false" />
+  <field name="plazo_fin_efectivo" type="pdate" indexed="true" stored="true" multiValued="false" />
+  <field name="plazo_origen" type="string" indexed="true" stored="true" required="false" multiValued="false" />
+  <field name="abierto" type="boolean" indexed="true" stored="true" required="false" multiValued="false" />
+  <field name="presupuesto_total" type="pdouble" indexed="true" stored="true" multiValued="false" />
+  <field name="fuente" type="string" indexed="true" stored="true" required="false" multiValued="false" />
+  <field name="_snapshot_date" type="string" indexed="false" stored="true" required="false" multiValued="false" />
+  <field name="_query_params" type="string" indexed="false" stored="true" required="false" multiValued="false" />
+
   <!-- Model fields  -->
   <field name="alphas" type="pfloat" indexed="true" stored="true" multiValued="false" />
   <field name="topic_entropy" type="pfloat" indexed="true" stored="true" multiValued="false" />

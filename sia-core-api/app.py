@@ -67,9 +67,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     logger.info("Starting SIA-Core API...")
 
     try:
-        config_path = pathlib.Path(__file__).parent / "config" / "config.cf"
-        app.state.solr_client = SIASolrClient(
-            logger, config_file=str(config_path))
+        app.state.solr_client = SIASolrClient(logger)
         logger.info("Solr client initialized successfully")
     except Exception:
         # Full detail to the server log only (IDX-001); startup still fails hard.

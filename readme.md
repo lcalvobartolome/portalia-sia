@@ -7,7 +7,7 @@ Intelligence and Analysis System for Public Procurement and Aid (from Spanish, *
   - [Services](#services)
   - [Instructions for deployment](#instructions-for-deployment)
     - [1. Create env file with the following structure](#1-create-env-file-with-the-following-structure)
-    - [2. Actualize folder with data and GPU resources in docker-compose.yaml](#2-actualize-folder-with-data-and-gpu-resources-in-docker-composeyaml)
+    - [2. Point the compose files at your corpus data (and, optionally, a GPU)](#2-point-the-compose-files-at-your-corpus-data-and-optionally-a-gpu)
     - [3. Prepare host directory permissions](#3-prepare-host-directory-permissions)
     - [4. Initialize Solr storage and config (one-time)](#4-initialize-solr-storage-and-config-one-time)
     - [5. Build and start services](#5-build-and-start-services)
@@ -28,8 +28,8 @@ Intelligence and Analysis System for Public Procurement and Aid (from Spanish, *
       - [With curl](#with-curl)
     - [Public Endpoints (no authentication required)](#public-endpoints-no-authentication-required)
   - [Commands](#commands)
-    - [To index a corpus:](#to-index-a-corpus)
-    - [To launch the extract pipeline:](#to-launch-the-extract-pipeline)
+    - [To index a corpus](#to-index-a-corpus)
+    - [To launch the extract pipeline](#to-launch-the-extract-pipeline)
 
 ## Documentation
 
@@ -40,7 +40,7 @@ Intelligence and Analysis System for Public Procurement and Aid (from Spanish, *
 ## Services
 
 | Service | Port | Description |
-|---------|------|-------------|
+| --------- | ------ | ------------- |
 | sia-core-api | 10083 | Main REST API |
 | solr | 10085 | Apache Solr search engine |
 | zoo | 10086/10087 | Zookeeper for Solr Cloud |
@@ -51,7 +51,7 @@ Intelligence and Analysis System for Public Procurement and Aid (from Spanish, *
 
 Create a `.env` file in the project root:
 
-```bash
+```
 # Master key for API key management (admin operations)
 SIA_MASTER_KEY=your-secure-master-key-here
 
@@ -61,7 +61,7 @@ CORS_ORIGINS=http://<host>:3000,https://your-frontend.com
 # GitHub token to clone private pipeline repository during Docker build
 GITHUB_TOKEN=your-github-token-here
 
-# UID/GID the sia-core-api container runs as. It must be able to write the bind-mounted host dirs (./data, ./sia-config, ./db/data/sqlite3). 
+# UID/GID the sia-core-api container runs as. It must be able to write the bind-mounted host dirs (./sia-config, ./db/data/sqlite3) and to read the external corpus data dirs set below (SIA_DATA_DIR, SIA_BDNS_DATA_DIR), mounted at /mnt/data_place and /mnt/data_bdns.
 # If those dirs belong to your user, set these to the output of `id -u` / `id -g` and rebuild the image.
 APP_UID=1000
 APP_GID=1000
@@ -69,45 +69,30 @@ APP_GID=1000
 # Optional: pin the pipeline dependency to an immutable commit for reproducible builds
 # Defaults to "main" when unset.
 # PIPELINE_REF=<full-commit-sha>
+
+# Host paths for the corpus data mounted into sia-core-api
+SIA_DATA_DIR=/path/to/place/data
+SIA_BDNS_DATA_DIR=/path/to/bdns/data
 ```
 
-### 2. Actualize folder with data and GPU resources in docker-compose.yaml
+### 2. Point the compose files at your corpus data (and, optionally, a GPU)
 
-```yaml
-networks:
-  sia-net:
-    name: sia-net
-services:
-  sia-core-api:
-    build:
-      context: ./sia-core-api
-      args:
-        GITHUB_TOKEN: ${GITHUB_TOKEN}
-        APP_UID: ${APP_UID:-1000}
-        APP_GID: ${APP_GID:-1000}
-    container_name: sia-core-api
-    user: "${APP_UID:-1000}:${APP_GID:-1000}"
-    ports:
-      - 10083:10083
-    environment:
-      # NVIDIA_DRIVER_CAPABILITIES: compute,utility # needed in Lt2
-      SOLR_URL: http://solr:8983
-      SIA_MASTER_KEY: ${SIA_MASTER_KEY:-master-key-change-in-production}
-      API_KEYS_FILE: /config/api_keys.json
-      CORS_ORIGINS: ${CORS_ORIGINS:-http://<host>:3000,http://<host>:8080}
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
-    depends_on:
-      - solr
-    volumes:
-      - {folder_with_data}:/mnt/data >>---
-      - ./sia-config:/config
-      - ./db/data/sqlite3/pipeline_jobs.db:/data/pipeline_jobs.db
+`docker-compose.yaml` and `docker-compose.podman.yaml` both read `SIA_DATA_DIR` /
+`SIA_BDNS_DATA_DIR` from `.env` and mount them read-write at `/mnt/data_place`
+and `/mnt/data_bdns` respectively — set them in step 1 above, no need to edit
+either compose file for this. The container-side targets must match
+`path_source` in the `[place-config]` / `[bdns-config]` sections of
+`sia-config/config.cf`. Only the host-side paths change per environment, via
+`.env`.
+
+If the machine has a GPU, uncomment the `reservations` block under
+`sia-core-api.deploy.resources` in `docker-compose.yaml`:
+
+```
     deploy:
       resources:
         limits:
           memory: 100GB
-        # remove the following for Lt2
         reservations:
           devices:
             - driver: nvidia
@@ -115,23 +100,36 @@ services:
               capabilities: [gpu]
 ```
 
+Under Podman, use CDI instead (see the commented-out example in
+`docker-compose.podman.yaml`):
+
+```
+        reservations:
+          devices:
+            - nvidia.com/gpu=all
+```
+
 ### 3. Prepare host directory permissions
 
-`sia-core-api` runs as an unprivileged user (`APP_UID:APP_GID`, default `1000:1000`). That user must own the bind-mounted paths it writes to:
+`sia-core-api` runs as an unprivileged user (`APP_UID:APP_GID`). Set `APP_UID`/`APP_GID`
+in `.env` to **your own** `id -u`/`id -g` (the default in step 1 is just a placeholder) —
+that way, when you create these paths yourself below, you already own them and none of
+this needs `sudo`:
 
-```bash
-mkdir -p ./data ./db/data/sqlite3
+```
+mkdir -p ./sia-config ./db/data/sqlite3
 touch   ./db/data/sqlite3/pipeline_jobs.db
-sudo chown -R ${APP_UID:-1000}:${APP_GID:-1000} ./data ./sia-config ./db/data/sqlite3
 
 # Restrict access to other users on the host (api_keys.json holds hashed API keys)
 chmod 750 ./sia-config
 chmod 600 ./sia-config/api_keys.json 2>/dev/null || true
 ```
 
+The `SIA_DATA_DIR` / `SIA_BDNS_DATA_DIR` directories from step 1 are external to this repo and usually managed separately — just confirm the `APP_UID:APP_GID` user can read them (e.g. `stat <path>`); don't `chown` them as part of this deployment unless you also own that data.
+
 ### 4. Initialize Solr storage and config (one-time)
 
-```bash
+```
 # 1) Solr data dir must be owned by the solr user (UID 8983) inside the container
 mkdir -p ./db/data/solr
 sudo chown -R 8983:8983 ./db/data/solr
@@ -150,13 +148,13 @@ docker compose exec solr bin/solr zk ls /configs -z zoo:2181
 
 ### 5. Build and start services
 
-```bash
+```
 docker compose up -d --build
 ```
 
 To follow the logs:
 
-```bash
+```
 docker compose logs -f sia-core-api
 ```
 
@@ -172,8 +170,11 @@ anything there (e.g. no internet access, no `GITHUB_TOKEN`, no build tools).
 
 A ready-to-use `docker-compose.podman.yaml` is kept at the project root next
 to `docker-compose.yaml` specifically for this. The two files build the exact
-same two images with the exact same tags (`sia-core-api:latest`,
-`sia-solr:9.1.1`).
+same two images with the exact same tags by default (`sia-core-api:latest`,
+`sia-solr:9.1.1`) and read the same `.env` (`SIA_DATA_DIR`, `SIA_BDNS_DATA_DIR`,
+`APP_UID`/`APP_GID`, etc.); override `SIA_CORE_API_IMAGE` / `SOLR_IMAGE` /
+`ZOOKEEPER_IMAGE` in `.env` instead if the target machine should use
+differently-tagged precompiled images.
 
 ### 1. On the source machine: build and export the images
 
@@ -182,7 +183,7 @@ machine has internet access Podman will just pull it itself and you can drop it
 from the command below. Include it only if the target machine is offline /
 air-gapped:
 
-```bash
+```
 docker compose build
 docker save -o sia-images.tar \
   sia-core-api:latest sia-solr:9.1.1 \
@@ -197,7 +198,7 @@ docker save -o sia-images.tar \
 
 ### 3. Load the images and start the stack
 
-```bash
+```
 podman load -i sia-images.tar
 podman compose -f docker-compose.podman.yaml up -d
 ```
@@ -222,7 +223,7 @@ The API uses a two-tier authentication system:
 
 Set the following environment variables (in `.env` file or docker-compose):
 
-```bash
+```
 SIA_MASTER_KEY=your-secure-master-key-here
 CORS_ORIGINS=http://<host>:3000,https://your-frontend.com
 ```
@@ -233,7 +234,7 @@ Use the master key to manage API keys through the admin endpoints.
 
 #### Generate a new API key
 
-```bash
+```
 curl -X POST "http://<host>:10083/admin/api-keys" \
   -H "X-API-Key: your-master-key" \
   -H "Content-Type: application/json" \
@@ -242,7 +243,7 @@ curl -X POST "http://<host>:10083/admin/api-keys" \
 
 Response:
 
-```json
+```
 {
   "key_id": "a1b2c3d4",
   "name": "frontend-production",
@@ -253,21 +254,21 @@ Response:
 
 #### List all API keys
 
-```bash
+```
 curl -X GET "http://<host>:10083/admin/api-keys" \
   -H "X-API-Key: your-master-key"
 ```
 
 #### Revoke an API key
 
-```bash
+```
 curl -X POST "http://<host>:10083/admin/api-keys/{key_id}/revoke" \
   -H "X-API-Key: your-master-key"
 ```
 
 #### Delete an API key
 
-```bash
+```
 curl -X DELETE "http://<host>:10083/admin/api-keys/{key_id}" \
   -H "X-API-Key: your-master-key"
 ```
@@ -284,7 +285,7 @@ curl -X DELETE "http://<host>:10083/admin/api-keys/{key_id}" \
 
 #### With curl
 
-```bash
+```
 curl -X GET "http://<host>:10083/api/documents/search?query=test" \
   -H "X-API-Key: your-api-key"
 ```
@@ -298,9 +299,9 @@ curl -X GET "http://<host>:10083/api/documents/search?query=test" \
 
 ## Commands
 
-### To index a corpus:
+### To index a corpus
 
-```bash
+```
 curl -X 'POST' \
   'http://<host>:<port>/processing/corpora' \
   -H 'accept: application/json' \
@@ -311,9 +312,9 @@ curl -X 'POST' \
 }'
 ```
 
-### To launch the extract pipeline:
+### To launch the extract pipeline
 
-```bash
+```
 curl -X 'POST' \
   'http://<host>:<port>/processing/alia-pipeline/extract' \
   -H 'accept: application/json' \

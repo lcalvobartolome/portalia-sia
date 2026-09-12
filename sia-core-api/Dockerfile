@@ -105,7 +105,7 @@ RUN wget -q $MALLET_URL -O /tmp/mallet.tar.gz && \
     rm /tmp/mallet.tar.gz && \
     rm -rf /opt/mallet/sample-data  # Remove sample data to reduce image size
 
-RUN mkdir -p /mnt/data /data/inference
+RUN mkdir -p /mnt/data_place /data/inference
 
 # Persistent Hugging Face cache baked into the image itself
 ENV HF_HOME=/opt/hf_cache
@@ -126,8 +126,8 @@ COPY . .
 # cached at runtime
 RUN (getent group "${APP_GID}" || groupadd -g "${APP_GID}" app) && \
     (getent passwd "${APP_UID}" || useradd -l --no-log-init -u "${APP_UID}" -g "${APP_GID}" -m -s /usr/sbin/nologin app) && \
-    mkdir -p /mnt/data /data/inference /config && \
-    chown -R "${APP_UID}:${APP_GID}" /app /mnt/data /data /config /opt/hf_cache /opt/mallet
+    mkdir -p /mnt/data_place /data/inference /config && \
+    chown -R "${APP_UID}:${APP_GID}" /app /mnt/data_place /data /config /opt/hf_cache /opt/mallet
 
 USER ${APP_UID}:${APP_GID}
 

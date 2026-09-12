@@ -20,7 +20,7 @@ searchable_fields=id,title,generative_objective,cpv,cpv_predicted,criterios_adju
 thetas_max_sum=1000
 betas_max_sum=1000
 max_sum_neural_models=100000
-path_source=/mnt/data
+path_source=/mnt/data_place
 
 [inferencer]
 thetas_thr=3e-3
@@ -46,8 +46,17 @@ MetadataDisplayed=id,title,link
 SearcheableField=id,title
 
 [place-config]
+path_source=/mnt/data_place
 id_field=id
 title_field=title
 date_field=updated
 MetadataDisplayed=id,title,link
 SearcheableField=id,title
+
+[bdns-config]
+path_source=/mnt/data_bdns
+id_field=id
+title_field=descripcion
+date_field=fecha_registro
+MetadataDisplayed=id,title,link,finalidad,organo_entidad,organo_ambito,presupuesto_total,plazo_fin_efectivo
+SearcheableField=id,title,bases_reguladoras,organo_entidad,finalidad

@@ -75,7 +75,7 @@ VALID_TIPOS = {"minors", "outsiders", "insiders"}
 # ======================================================
 # SQLite job store
 # ======================================================
-_DB_PATH = Path(os.environ.get("PIPELINE_DB_PATH", "/mnt/data/pipeline_jobs.db"))
+_DB_PATH = Path(os.environ.get("PIPELINE_DB_PATH", "/mnt/data_place/pipeline_jobs.db"))
 
 
 def _conn() -> sqlite3.Connection:
@@ -499,7 +499,7 @@ async def delete_corpus(
             "content": {
                 "application/json": {
                     "example": {
-                        "base_dir": "/mnt/data/2025_26",
+                        "base_dir": "/mnt/data_place/2025_26",
                         "tipo": "insiders",
                         "calculate_on": "texto_traducido",
                         "llm_model_gen": "qwen3:32b",
