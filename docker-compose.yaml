@@ -4,33 +4,22 @@ networks:
 
 services:
   sia-core-api:
-    image: ${SIA_CORE_API_IMAGE:-sia-core-api:latest} # to use a precompiled image instead of building; comment out if build is going to be used.
+    image: ${SIA_CORE_API_IMAGE:-sia-core-api:latest}
     build:
       context: ./sia-core-api
       args:
         APP_UID: ${APP_UID:-1000}
         APP_GID: ${APP_GID:-1000}
         PIPELINE_REF: ${PIPELINE_REF:-main}
-      # Passed as a BuildKit secret, not a build ARG (IDX-006): an ARG's value
-      # ends up in the image's history metadata even after any file that used
-      # it is deleted. See secrets: below.
       secrets:
         - github_token
     container_name: sia-core-api
-    # Run as an unprivileged user (see IDX-002). Must match the owner of the
-    # bind-mounted host dirs; override APP_UID/APP_GID in .env and re-build if needed.
     user: "${APP_UID:-1000}:${APP_GID:-1000}"
-    # Defence in depth (IDX-002): no privilege escalation, drop all Linux
-    # capabilities (the API is a plain non-root Python process). Relax cap_drop
-    # only if a dependency is shown to need a specific capability.
     security_opt:
       - no-new-privileges:true
     cap_drop:
       - ALL
-    # Bound log retention on the host (audit plan item: "revisar... periodos de
-    # conservación de los registros"). Sanitized 5xx bodies still carry a
-    # correlation id; the matching detail lives in these logs (IDX-001) - keep
-    # them, but don't let them grow unbounded.
+    # Bound log retention on the host
     logging:
       driver: json-file
       options:
@@ -44,8 +33,7 @@ services:
       SIA_MASTER_KEY: ${SIA_MASTER_KEY:-master-key-change-in-production}
       API_KEYS_FILE: /config/api_keys.json
       CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:3000,http://localhost:8080}
-      # Must match the target of the pipeline_jobs.db bind mount below, or the
-      # job store silently falls back to /mnt/data_place/pipeline_jobs.db.
+      # Must match the target of the pipeline_jobs.db bind mount below, or the job store silently falls back to /mnt/data_place/pipeline_jobs.db.
       PIPELINE_DB_PATH: /data/pipeline_jobs.db
     extra_hosts:
       - "host.docker.internal:host-gateway"
@@ -70,13 +58,14 @@ services:
         #      capabilities: [gpu]
 
   solr:
-    image: ${SOLR_IMAGE:-sia-solr:9.1.1} # to use a precompiled image instead of building; comment out if build is going to be used.
+    image: ${SOLR_IMAGE:-sia-solr:9.1.1}
     build:
       context: ./solr-plugins/NP-solr-dist-plugin
     container_name: sia-solr
     restart: always
+    user: "${APP_UID:-1000}:${APP_GID:-1000}"
     security_opt:
-      - no-new-privileges:true # IDX-002 (the official Solr image already runs as uid 8983)
+      - no-new-privileges:true # IDX-002
     logging:
       driver: json-file
       options:
@@ -109,12 +98,11 @@ services:
           memory: 100GB
 
   zoo:
-    # Pinned by digest (IDX-006). zookeeper:latest as of 2025-07.
     image: ${ZOOKEEPER_IMAGE:-docker.io/library/zookeeper@sha256:4c6f15fbd5491a3e01b0108c046891125553329a4956848ba3014cedff5386ee}
     container_name: sia-zoo
     restart: always
     security_opt:
-      - no-new-privileges:true # IDX-002 (the official ZooKeeper image already runs as the `zookeeper` user)
+      - no-new-privileges:true
     logging:
       driver: json-file
       options:
@@ -135,9 +123,6 @@ services:
         limits:
           memory: 100GB
 
-# Build-only secret (IDX-006): sourced from the GITHUB_TOKEN env var / .env,
-# handed to the sia-core-api build as a BuildKit secret mount rather than a
-# build ARG so its value never lands in the image's history metadata.
 secrets:
   github_token:
     environment: GITHUB_TOKEN

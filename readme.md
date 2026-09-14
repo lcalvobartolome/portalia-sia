@@ -67,8 +67,13 @@ CORS_ORIGINS=http://<host>:3000,https://your-frontend.com
 # GitHub token to clone private pipeline repository during Docker build
 GITHUB_TOKEN=your-github-token-here
 
-# UID/GID the sia-core-api container runs as. It must be able to write the bind-mounted host dirs (./sia-config, ./db/data/sqlite3) and to read the external corpus data dirs set below (SIA_DATA_DIR, SIA_BDNS_DATA_DIR), mounted at /mnt/data_place and /mnt/data_bdns.
-# If those dirs belong to your user, set these to the output of `id -u` / `id -g` and rebuild the image.
+# UID/GID that sia-core-api AND solr run as. Both containers run as this
+# user instead of a fixed built-in one, so every bind-mounted host dir
+# (./sia-config, ./db/data/sqlite3, ./db/data/solr) just needs to be owned by
+# whoever creates it — no `chown`/`sudo` step is ever required, on Mac or
+# Linux. Also used to read the external corpus data dirs set below
+# (SIA_DATA_DIR, SIA_BDNS_DATA_DIR), mounted at /mnt/data_place and /mnt/data_bdns.
+# Set these to the output of `id -u` / `id -g` and rebuild the image.
 APP_UID=1000
 APP_GID=1000
 
@@ -77,6 +82,9 @@ APP_GID=1000
 # PIPELINE_REF=<full-commit-sha>
 
 # Host paths for the corpus data mounted into sia-core-api
+# Must be absolute, or start with "./" if relative — a bare "data/place" is
+# parsed by Compose as a *named volume* reference (not a bind-mount path) and
+# fails with "refers to undefined volume".
 SIA_DATA_DIR=/path/to/place/data
 SIA_BDNS_DATA_DIR=/path/to/bdns/data
 ```
@@ -117,13 +125,14 @@ Under Podman, use CDI instead (see the commented-out example in
 
 ### 3. Prepare host directory permissions
 
-`sia-core-api` runs as an unprivileged user (`APP_UID:APP_GID`). Set `APP_UID`/`APP_GID`
-in `.env` to **your own** `id -u`/`id -g` (the default in step 1 is just a placeholder) —
-that way, when you create these paths yourself below, you already own them and none of
-this needs `sudo`:
+Both `sia-core-api` and `solr` run as an unprivileged user (`APP_UID:APP_GID`) instead
+of any built-in container user. Set `APP_UID`/`APP_GID` in `.env` to **your own**
+`id -u`/`id -g` (the default in step 1 is just a placeholder) — that way, when you
+create these paths yourself below, you already own them and **none of this needs
+`sudo` or a `chown` to a container-specific UID**, on Mac or Linux:
 
 ```
-mkdir -p ./sia-config ./db/data/sqlite3
+mkdir -p ./sia-config ./db/data/sqlite3 ./db/data/solr
 touch   ./db/data/sqlite3/pipeline_jobs.db
 
 # Restrict access to other users on the host (api_keys.json holds hashed API keys)
@@ -133,17 +142,21 @@ chmod 600 ./sia-config/api_keys.json 2>/dev/null || true
 
 The `SIA_DATA_DIR` / `SIA_BDNS_DATA_DIR` directories from step 1 are external to this repo and usually managed separately — just confirm the `APP_UID:APP_GID` user can read them (e.g. `stat <path>`); don't `chown` them as part of this deployment unless you also own that data.
 
+> **macOS / Docker Desktop note**: if a bind-mounted dir was previously owned by a
+> container's built-in UID (e.g. an old deployment that ran Solr as UID 8983), Docker
+> Desktop's virtiofs bridge can leave it in a state where even a matching UID can't
+> write to it. If you hit `Permission denied` on a directory that already looks
+> correctly owned, `rm -rf` and `mkdir` it again as your own user rather than trying
+> to `chmod` it in place.
+
 ### 4. Initialize Solr storage and config (one-time)
 
 ```
-# 1) Solr data dir must be owned by the solr user (UID 8983) inside the container
-mkdir -p ./db/data/solr
-sudo chown -R 8983:8983 ./db/data/solr
-
-# 2) Bring up only Zookeeper + Solr first
+# 1) Bring up only Zookeeper + Solr first (./db/data/solr was already created
+#    and owned by you in step 3 — no extra chown needed)
 docker compose up -d zoo solr
 
-# 3) Upload the `sia_config` configset to Zookeeper.
+# 2) Upload the `sia_config` configset to Zookeeper.
 docker compose exec solr bin/solr zk upconfig \
   -z zoo:2181 -n sia_config \
   -d /opt/solr/server/solr/configsets/sia_config

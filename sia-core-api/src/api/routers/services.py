@@ -100,6 +100,22 @@ def _require_capability(sc, corpus_collection: str, capability: CorpusCapability
         )
 
 
+def _raise_indicator_error(result: dict, status: int) -> None:
+    """
+    Raise the appropriate APIException for a failed indicator query.
+
+    The do_QXX indicator methods (sia_solr_client.py) return (result, 400)
+    with a "not a valid corpus collection" error when 'place' isn't indexed
+    in Solr (see check_is_corpus) — surface that as a 404 so callers see
+    why, instead of a generic Solr failure. Any other non-200 status is a
+    genuine Solr-side error.
+    """
+    if status == 400:
+        raise NotFoundException(result.get("error", "Corpus 'place' not found"))
+    logger.error("Solr indicator query failed (status=%s): %s", status, result.get("error"))
+    raise SolrException("Solr query failed")
+
+
 def _require_secondary_field(sc, corpus_collection: str, field: str) -> None:
     """
     Raise NotFoundException / ValidationException if `field` is not one of
@@ -139,6 +155,20 @@ def _date_to_fq(date_value: str) -> str:
     return f"updated:{date_value}"
 
 
+def _extra_filter_to_fq(key: str, value: str) -> str:
+    """
+    Build an exact-match Solr fq clause for a MetadataFilter.extra entry.
+
+    Quoted (and escaped) so multi-word values match as a single phrase
+    against exact-match ``string`` fields (e.g. 'organo_entidad') instead
+    of being split into separate clauses by Solr's query parser - e.g.
+    'organo_entidad:Ministerio de Industria' unquoted parses as
+    'organo_entidad:Ministerio AND de AND Industria', which matches nothing.
+    """
+    escaped = str(value).replace("\\", "\\\\").replace('"', '\\"')
+    return f'{key}:"{escaped}"'
+
+
 def _build_filter_query(
     filters: MetadataFilter | None,
 ) -> str | None:
@@ -148,7 +178,7 @@ def _build_filter_query(
     Field mapping:
     - ``date``  → ``updated`` (see ``_date_to_fq`` for accepted formats)
     - ``cpv``   → ``cpv_list``
-    - ``extra`` → arbitrary indexed fields (passed through as-is)
+    - ``extra`` → arbitrary indexed fields (exact match, see ``_extra_filter_to_fq``)
 
     Returns ``None`` if no filters are active.
     """
@@ -161,7 +191,7 @@ def _build_filter_query(
             parts.append(f"cpv_list:{filters.cpv}")
         if filters.extra:
             for key, value in filters.extra.items():
-                parts.append(f"{key}:{value}")
+                parts.append(_extra_filter_to_fq(key, value))
 
     return " AND ".join(parts) if parts else None
 
@@ -219,7 +249,7 @@ def _semantic_by_text_examples() -> dict:
                 "query_text": "ayudas para la transicion energetica en pymes",
                 "filters": {
                     "date": "2025",
-                    "extra": {"organo_entidad": "Ministerio de Industria"},
+                    "extra": {"organo_entidad": "MINISTERIO DE INDUSTRIA"},
                 },
                 "pagination": {"start": 0, "rows": 10},
             },
@@ -230,6 +260,19 @@ def _semantic_by_text_examples() -> dict:
             {
                 "query_text": "subvenciones para proyectos de I+D+i",
                 "pagination": {"start": 0, "rows": 5},
+            },
+        ),
+        (
+            "BDNS - Cultural grants filtered by issuing body",
+            "[corpus_collection=bdns] Semantic search over grant descriptions, "
+            "filtered by 'organo_entidad' (the issuing ministry/body) via 'extra'",
+            {
+                "query_text": "subvenciones para la edicion de libros",
+                "filters": {
+                    "date": "2025",
+                    "extra": {"organo_entidad": "MINISTERIO DE CULTURA"},
+                },
+                "pagination": {"start": 0, "rows": 10},
             },
         ),
     )
@@ -299,7 +342,7 @@ def _semantic_by_document_examples() -> dict:
             "BDNS - By document IDs",
             "[corpus_collection=bdns] Semantic similarity aggregated from indexed grant documents.",
             {
-                "doc_ids": ["<bdns_doc_id_1>", "<bdns_doc_id_2>"],
+                "doc_ids": ["bdns:806695", "bdns:867440"],
                 "filters": {
                     "date": "2025",
                 },
@@ -313,9 +356,22 @@ def _semantic_by_document_examples() -> dict:
             "documents and find similar ones",
             {
                 "doc_ids": [],
-                "secondary_ids": {"codigo_bdns": ["<codigo_bdns_1>", "<codigo_bdns_2>"]},
+                "secondary_ids": {"codigo_bdns": ["806695", "867440"]},
                 "filters": {
                     "date": "2025",
+                },
+                "pagination": {"start": 0, "rows": 10},
+            },
+        ),
+        (
+            "BDNS - Mixed IDs and codigo_bdns",
+            "[corpus_collection=bdns] Combine an explicit document ID with codigo_bdns resolution",
+            {
+                "doc_ids": ["bdns:806695"],
+                "secondary_ids": {"codigo_bdns": ["867440"]},
+                "filters": {
+                    "date": "2025",
+                    "extra": {"organo_entidad": "MINISTERIO DE CULTURA"},
                 },
                 "pagination": {"start": 0, "rows": 10},
             },
@@ -456,10 +512,27 @@ async def get_corpus_metadata_fields(
         "procurement-specific fields (budget, CPV, award data) that BDNS "
         "grants don't have."
     ),
-    responses=error_responses(
-        NotFoundException, SolrException,
-        NotFoundException="Corpus not found",
-    ),
+    responses={
+        200: {
+            "content": {
+                "application/json": {
+                    "example": {
+                        "success": True,
+                        "message": None,
+                        "data": {
+                            "corpus": "bdns",
+                            "capabilities": ["metadata", "semantic_by_text", "semantic_by_document"],
+                            "secondary_id_fields": ["codigo_bdns"],
+                        },
+                    }
+                }
+            }
+        },
+        **error_responses(
+            NotFoundException, SolrException,
+            NotFoundException="Corpus not found",
+        ),
+    },
 )
 async def get_corpus_capabilities(
     request: Request,
@@ -604,13 +677,16 @@ async def similar_documents_by_id(
         if not doc_ids:
             raise NotFoundException("No documents found for the provided IDs or secondary_ids")
 
-        result = sc.do_Q21_by_doc(
+        result, status = sc.do_Q21_by_doc(
             corpus_col=corpus_collection,
             doc_ids=doc_ids,
             filter_query=_build_filter_query(body.filters),
             start=body.pagination.start,
             rows=body.pagination.rows,
         )
+        if status != 200:
+            logger.error("Solr semantic-by-document query failed (status=%s)", status)
+            raise SolrException("Solr query failed")
         return DataResponse(success=True, data=result)
     except APIException:
         raise
@@ -844,7 +920,8 @@ def _indicator_examples_insiders_only() -> dict:
         "Only available for the 'place' corpus — see GET /corpora/place/capabilities."
     ),
     responses=error_responses(
-        ValidationException, SolrException,
+        NotFoundException, ValidationException, SolrException,
+        NotFoundException="Corpus 'place' not indexed",
     ),
     openapi_extra=_indicator_examples(),
 )
@@ -870,8 +947,7 @@ async def calculate_indicator_total_procurement(
             topic_min_weight = body.topic_min_weight,
         )
         if status != 200:
-            logger.error("Solr indicator query failed (status=%s): %s", status, result.get("error"))
-            raise SolrException("Solr query failed")
+            _raise_indicator_error(result, status)
         return DataResponse(success=True, data=result)
     except APIException:
         raise
@@ -888,7 +964,10 @@ async def calculate_indicator_total_procurement(
         "Filter by source, CPV, date range, geography or contracting authority. "
         "Only available for the 'place' corpus — see GET /corpora/place/capabilities."
     ),
-    responses=error_responses(ValidationException, SolrException),
+    responses=error_responses(
+        NotFoundException, ValidationException, SolrException,
+        NotFoundException="Corpus 'place' not indexed",
+    ),
     openapi_extra=_indicator_examples(),
 )
 async def calculate_indicator_single_bidder(
@@ -913,8 +992,7 @@ async def calculate_indicator_single_bidder(
             topic_min_weight = body.topic_min_weight,
         )
         if status != 200:
-            logger.error("Solr indicator query failed (status=%s): %s", status, result.get("error"))
-            raise SolrException("Solr query failed")
+            _raise_indicator_error(result, status)
         return DataResponse(success=True, data=result)
     except APIException:
         raise
@@ -931,7 +1009,10 @@ async def calculate_indicator_single_bidder(
         "Filter by source, CPV, date range, geography or contracting authority. "
         "Only available for the 'place' corpus — see GET /corpora/place/capabilities."
     ),
-    responses=error_responses(ValidationException, SolrException),
+    responses=error_responses(
+        NotFoundException, ValidationException, SolrException,
+        NotFoundException="Corpus 'place' not indexed",
+    ),
     openapi_extra=_indicator_examples_insiders_only(),
 )
 async def calculate_indicator_decision_speed(
@@ -957,8 +1038,7 @@ async def calculate_indicator_decision_speed(
             topic_min_weight = body.topic_min_weight,
         )
         if status != 200:
-            logger.error("Solr indicator query failed (status=%s): %s", status, result.get("error"))
-            raise SolrException("Solr query failed")
+            _raise_indicator_error(result, status)
         return DataResponse(success=True, data=result)
     except APIException:
         raise
@@ -976,7 +1056,10 @@ async def calculate_indicator_decision_speed(
         "Filter by source, CPV, date range, geography or contracting authority. "
         "Only available for the 'place' corpus — see GET /corpora/place/capabilities."
     ),
-    responses=error_responses(ValidationException, SolrException),
+    responses=error_responses(
+        NotFoundException, ValidationException, SolrException,
+        NotFoundException="Corpus 'place' not indexed",
+    ),
     openapi_extra=_indicator_examples(),
 )
 async def calculate_indicator_direct_awards(
@@ -1001,8 +1084,7 @@ async def calculate_indicator_direct_awards(
             topic_min_weight = body.topic_min_weight,
         )
         if status != 200:
-            logger.error("Solr indicator query failed (status=%s): %s", status, result.get("error"))
-            raise SolrException("Solr query failed")
+            _raise_indicator_error(result, status)
         return DataResponse(success=True, data=result)
     except APIException:
         raise
@@ -1019,7 +1101,10 @@ async def calculate_indicator_direct_awards(
         "Filter by source, CPV, date range, geography or contracting authority. "
         "Only available for the 'place' corpus — see GET /corpora/place/capabilities."
     ),
-    responses=error_responses(ValidationException, SolrException),
+    responses=error_responses(
+        NotFoundException, ValidationException, SolrException,
+        NotFoundException="Corpus 'place' not indexed",
+    ),
     openapi_extra=_indicator_examples(),
 )
 async def calculate_indicator_ted_publication(
@@ -1044,8 +1129,7 @@ async def calculate_indicator_ted_publication(
             topic_min_weight = body.topic_min_weight,
         )
         if status != 200:
-            logger.error("Solr indicator query failed (status=%s): %s", status, result.get("error"))
-            raise SolrException("Solr query failed")
+            _raise_indicator_error(result, status)
         return DataResponse(success=True, data=result)
     except APIException:
         raise
@@ -1063,7 +1147,10 @@ async def calculate_indicator_ted_publication(
         "Filter by source, CPV, date range, geography or contracting authority. "
         "Only available for the 'place' corpus — see GET /corpora/place/capabilities."
     ),
-    responses=error_responses(ValidationException, SolrException),
+    responses=error_responses(
+        NotFoundException, ValidationException, SolrException,
+        NotFoundException="Corpus 'place' not indexed",
+    ),
     openapi_extra=_indicator_examples_insiders_only(),
 )
 async def calculate_indicator_sme_participation(
@@ -1089,8 +1176,7 @@ async def calculate_indicator_sme_participation(
             topic_min_weight = body.topic_min_weight,
         )
         if status != 200:
-            logger.error("Solr indicator query failed (status=%s): %s", status, result.get("error"))
-            raise SolrException("Solr query failed")
+            _raise_indicator_error(result, status)
         return DataResponse(success=True, data=result)
     except APIException:
         raise
@@ -1108,7 +1194,10 @@ async def calculate_indicator_sme_participation(
         "Filter by source, CPV, date range, geography or contracting authority. "
         "Only available for the 'place' corpus — see GET /corpora/place/capabilities."
     ),
-    responses=error_responses(ValidationException, SolrException),
+    responses=error_responses(
+        NotFoundException, ValidationException, SolrException,
+        NotFoundException="Corpus 'place' not indexed",
+    ),
     openapi_extra=_indicator_examples_insiders_only(),
 )
 async def calculate_indicator_sme_offer_ratio(
@@ -1134,8 +1223,7 @@ async def calculate_indicator_sme_offer_ratio(
             topic_min_weight = body.topic_min_weight,
         )
         if status != 200:
-            logger.error("Solr indicator query failed (status=%s): %s", status, result.get("error"))
-            raise SolrException("Solr query failed")
+            _raise_indicator_error(result, status)
         return DataResponse(success=True, data=result)
     except APIException:
         raise
@@ -1153,7 +1241,10 @@ async def calculate_indicator_sme_offer_ratio(
         "Filter by source, CPV, date range, geography or contracting authority. "
         "Only available for the 'place' corpus — see GET /corpora/place/capabilities."
     ),
-    responses=error_responses(ValidationException, SolrException),
+    responses=error_responses(
+        NotFoundException, ValidationException, SolrException,
+        NotFoundException="Corpus 'place' not indexed",
+    ),
     openapi_extra=_indicator_examples(),
 )
 async def calculate_indicator_lots_division(
@@ -1178,8 +1269,7 @@ async def calculate_indicator_lots_division(
             topic_min_weight = body.topic_min_weight,
         )
         if status != 200:
-            logger.error("Solr indicator query failed (status=%s): %s", status, result.get("error"))
-            raise SolrException("Solr query failed")
+            _raise_indicator_error(result, status)
         return DataResponse(success=True, data=result)
     except APIException:
         raise
@@ -1197,7 +1287,10 @@ async def calculate_indicator_lots_division(
         "Filter by source, CPV, date range, geography or contracting authority. "
         "Only available for the 'place' corpus — see GET /corpora/place/capabilities."
     ),
-    responses=error_responses(ValidationException, SolrException),
+    responses=error_responses(
+        NotFoundException, ValidationException, SolrException,
+        NotFoundException="Corpus 'place' not indexed",
+    ),
     openapi_extra=_indicator_examples(),
 )
 async def calculate_indicator_missing_supplier_id(
@@ -1222,8 +1315,7 @@ async def calculate_indicator_missing_supplier_id(
             topic_min_weight = body.topic_min_weight,
         )
         if status != 200:
-            logger.error("Solr indicator query failed (status=%s): %s", status, result.get("error"))
-            raise SolrException("Solr query failed")
+            _raise_indicator_error(result, status)
         return DataResponse(success=True, data=result)
     except APIException:
         raise
@@ -1241,7 +1333,10 @@ async def calculate_indicator_missing_supplier_id(
         "Filter by source, CPV, date range, geography or contracting authority. "
         "Only available for the 'place' corpus — see GET /corpora/place/capabilities."
     ),
-    responses=error_responses(ValidationException, SolrException),
+    responses=error_responses(
+        NotFoundException, ValidationException, SolrException,
+        NotFoundException="Corpus 'place' not indexed",
+    ),
     openapi_extra=_indicator_examples(),
 )
 async def calculate_indicator_missing_buyer_id(
@@ -1266,8 +1361,7 @@ async def calculate_indicator_missing_buyer_id(
             topic_min_weight = body.topic_min_weight,
         )
         if status != 200:
-            logger.error("Solr indicator query failed (status=%s): %s", status, result.get("error"))
-            raise SolrException("Solr query failed")
+            _raise_indicator_error(result, status)
         return DataResponse(success=True, data=result)
     except APIException:
         raise

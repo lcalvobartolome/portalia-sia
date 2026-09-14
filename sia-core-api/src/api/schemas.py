@@ -321,8 +321,9 @@ class MetadataFilter(BaseModel):
         None,
         description=(
             "Additional metadata key-value filters against any indexed field. "
-            "Keys must be valid Solr field names; values are matched exactly "
-            "(e.g. {\"estado\": \"ADJ\", \"tender_type\": \"insiders\"})."
+            "Keys must be valid Solr field names; values are matched exactly, "
+            "including case, against the field as indexed (e.g. "
+            "{\"estado\": \"ADJ\", \"organo_entidad\": \"MINISTERIO DE CULTURA\"})."
         ),
     )
 
