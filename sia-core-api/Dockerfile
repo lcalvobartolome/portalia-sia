@@ -112,10 +112,20 @@ ENV HF_HOME=/opt/hf_cache
 ENV TRANSFORMERS_CACHE=/opt/hf_cache
 ENV SENTENCE_TRANSFORMERS_HOME=/opt/hf_cache
 
-# Pre-download the embeddings model into that cache.
+# Pre-download the embeddings model into that cache, pinned to the audited
+# commit. huggingface_hub only writes a local refs/<revision> pointer file
+# when the requested revision is NOT already a full commit sha, so pinning
+# an exact sha here means no refs/main gets written. But the runtime
+# EmbeddingsManager (in alia_pipeline) loads the model by name only, with
+# no revision pin, which defaults to "main"; with HF_HUB_OFFLINE=1 below
+# that lookup needs a local refs/main to resolve without network. So after
+# downloading the pinned commit we write refs/main ourselves next to
+# wherever its snapshot actually landed (searched for, not assumed, since
+# TRANSFORMERS_CACHE/SENTENCE_TRANSFORMERS_HOME above can route different
+# loaders to different cache subpaths under /opt/hf_cache).
 ARG MODEL_NAME=hiiamsid/sentence_similarity_spanish_es
 ARG MODEL_REVISION=66ab46adac3910bb6ea6085b962a25e49513b981
-RUN python3 -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('${MODEL_NAME}', revision='${MODEL_REVISION}')"
+RUN python3 -c "from pathlib import Path; from sentence_transformers import SentenceTransformer; model_name='${MODEL_NAME}'; revision='${MODEL_REVISION}'; SentenceTransformer(model_name, revision=revision); snapshot_dirs = list(Path('/opt/hf_cache').rglob('snapshots/' + revision)); assert snapshot_dirs, f'no snapshot for {model_name}@{revision} found under /opt/hf_cache'; [((d.parent.parent / 'refs').mkdir(parents=True, exist_ok=True), (d.parent.parent / 'refs' / 'main').write_text(revision), print(f'Wrote {d.parent.parent}/refs/main -> {revision}')) for d in snapshot_dirs]"
 
 # Fail fast instead of silently trying (and hanging) to hit the network if the cache is ever missing something once the container is moved/offline.
 ENV HF_HUB_OFFLINE=1

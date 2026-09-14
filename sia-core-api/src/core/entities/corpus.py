@@ -84,6 +84,25 @@ class Corpus(object):
         self.MetadataDisplayed = cf.get(
             section, "MetadataDisplayed").split(",")
         self.SearcheableField = cf.get(section, "SearcheableField").split(",")
+        self.embedding_text_fields = [
+            f.strip()
+            for f in cf.get(section, "embedding_text_fields", fallback="").split(",")
+            if f.strip()
+        ]
+        self.capabilities = frozenset(
+            f.strip()
+            for f in cf.get(section, "capabilities", fallback="").split(",")
+            if f.strip()
+        )
+        # Alternate identifier fields (besides the canonical 'id') that this
+        # corpus can be looked up by, e.g. 'expediente' for place or
+        # 'codigo_bdns' for bdns. None are hardcoded elsewhere — callers must
+        # name one of these explicitly.
+        self.secondary_id_fields = [
+            f.strip()
+            for f in cf.get(section, "secondary_id_fields", fallback="").split(",")
+            if f.strip()
+        ]
         if self.title_field in self.SearcheableField:
             self.SearcheableField.remove(self.title_field)
             self.SearcheableField.append("title")

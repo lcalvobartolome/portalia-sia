@@ -122,6 +122,9 @@ class SIASolrClient(SolrClient):
     ) -> None:
         super().__init__(logger)
 
+        self._config_file = config_file
+        self._corpus_cache: dict = {}
+
         # Read configuration from config file
         cf = configparser.ConfigParser()
         cf.read(config_file)
@@ -497,6 +500,63 @@ class SIASolrClient(SolrClient):
             return False
 
         return True
+
+    def _get_corpus(self, corpus_col: str) -> Optional[Corpus]:
+        """Returns the (memoized) per-corpus config, or None if the corpus
+        has no matching section in config.cf.
+        """
+        if corpus_col not in self._corpus_cache:
+            try:
+                self._corpus_cache[corpus_col] = Corpus(
+                    corpus_col, logger=self.logger, config_file=self._config_file
+                )
+            except ValueError:
+                self.logger.warning(
+                    f"-- -- No config section for corpus '{corpus_col}'.")
+                self._corpus_cache[corpus_col] = None
+        return self._corpus_cache[corpus_col]
+
+    def get_corpus_capabilities(self, corpus_col: str) -> Union[dict, int]:
+        """Returns the exploitation features declared as available for this
+        corpus collection in config.cf (e.g. semantic search, indicators),
+        plus the alternate identifier fields it can be looked up by besides
+        the canonical 'id' (e.g. 'expediente' for place, 'codigo_bdns' for
+        bdns) — see 'secondary_id_fields' in config.cf.
+        """
+        corpus_col = corpus_col.lower()
+
+        if not self.check_is_corpus(corpus_col):
+            return None, 400
+
+        corpus = self._get_corpus(corpus_col)
+        caps = sorted(corpus.capabilities) if corpus else []
+        secondary_id_fields = sorted(corpus.secondary_id_fields) if corpus else []
+        return {
+            "corpus": corpus_col,
+            "capabilities": caps,
+            "secondary_id_fields": secondary_id_fields,
+        }, 200
+
+    def _get_display_fl(self, corpus_col: str) -> Optional[str]:
+        """Builds a Solr 'fl' string from the corpus' own MetadataDisplayed
+        config (config.cf), plus 'score' for ranked/similarity results.
+
+        Used by semantic search (Q21/Q21_e) instead of a single hardcoded
+        field list, so results carry each corpus' own display fields (e.g.
+        'title'/'link' for both, but not PLACE-only fields like
+        'generative_objective' when querying bdns). Falls back to None
+        (caller uses the query template's own default) if the corpus has
+        no config section.
+        """
+        corpus = self._get_corpus(corpus_col)
+        if not corpus or not corpus.MetadataDisplayed:
+            return None
+        fields = list(corpus.MetadataDisplayed)
+        if "id" not in fields:
+            fields.insert(0, "id")
+        if "score" not in fields:
+            fields.append("score")
+        return ",".join(fields)
 
     def check_corpus_has_model(self, corpus_col, model_name) -> bool:
         """Checks if the collection given by 'corpus_col' has a model with name 'model_name'.
@@ -1091,7 +1151,8 @@ class SIASolrClient(SolrClient):
         self,
         corpus_col: str,
         doc_id: str = None,
-        expediente: str = None,
+        secondary_field: str = None,
+        secondary_value: str = None,
     ) -> Union[dict, int]:
         """Executes query Q6.
 
@@ -1101,8 +1162,13 @@ class SIASolrClient(SolrClient):
             Name of the corpus collection
         doc_id: str, optional
             ID of the document whose metadata is going to be retrieved.
-        expediente: str, optional
-            If provided, search by the 'expediente' field instead of 'id'.
+        secondary_field: str, optional
+            If provided (together with `secondary_value`), search by this
+            alternate identifier field instead of 'id'. Must be one of the
+            corpus' declared `secondary_id_fields` (config.cf) — e.g.
+            'expediente' for place, 'codigo_bdns' for bdns.
+        secondary_value: str, optional
+            Value to match against `secondary_field`.
 
         Returns
         -------
@@ -1120,8 +1186,17 @@ class SIASolrClient(SolrClient):
             return
 
         # 2. Execute query
-        if expediente is not None:
-            q6 = self.querier.customize_Q6(value=expediente, field='expediente')
+        if secondary_field is not None:
+            corpus = self._get_corpus(corpus_col)
+            valid_fields = corpus.secondary_id_fields if corpus else []
+            if secondary_field not in valid_fields:
+                return {
+                    "error": (
+                        f"'{secondary_field}' is not a valid secondary identifier "
+                        f"for corpus '{corpus_col}'. Valid: {valid_fields}."
+                    )
+                }, 400
+            q6 = self.querier.customize_Q6(value=secondary_value, field=secondary_field)
         else:
             q6 = self.querier.customize_Q6(value=doc_id, field='id')
         params = {k: v for k, v in q6.items() if k != 'q'}
@@ -1686,11 +1761,13 @@ class SIASolrClient(SolrClient):
         start, rows = self.custom_start_and_rows(start, rows, corpus_col)
         
         # 5. Calculate cosine similarity between the embedding of search_doc and the embeddings of the documents in the corpus
+        fl = self._get_display_fl(corpus_col)
         if keyword is None:
             q21 = self.querier.customize_Q21(
                 doc_embeddings=embs,
                 start=start,
-                rows=rows
+                rows=rows,
+                fl=fl,
             )
         else:
             q21 = self.querier.customize_Q21_e(
@@ -1698,7 +1775,8 @@ class SIASolrClient(SolrClient):
             keyword=keyword,
             query_fields=query_fields,
             start=start,
-            rows=rows
+            rows=rows,
+            fl=fl,
         )
         params = {k: v for k, v in q21.items() if k != 'q'}
 
@@ -1727,7 +1805,7 @@ class SIASolrClient(SolrClient):
         rows: int,
         filter_query: str = None,
         keyword: str = None,
-        query_fields: str = "raw_text",
+        query_fields: str = "SearcheableField",
         aggregation: str = "centroid"  # "centroid" | "rrf"
     ) -> Union[dict, int]:
         """
@@ -1800,13 +1878,18 @@ class SIASolrClient(SolrClient):
     ) -> dict[str, list[float]]:
         """Computes embeddings for docs that have none stored in Solr.
 
-        Tries 'generative_objective' first, then 'objeto' as fallback text source.
+        Text source fields are corpus-specific and declared per corpus in
+        config.cf (embedding_text_fields), tried in order until one is
+        non-empty. Falls back to 'title' if the corpus declares none.
         """
+        corpus = self._get_corpus(corpus_col)
+        text_fields = (corpus.embedding_text_fields if corpus else None) or ["title"]
+
         ids_filter = " OR ".join(f'id:"{doc_id}"' for doc_id in doc_ids)
         sc, results = self.execute_query(
             q=ids_filter,
             col_name=corpus_col,
-            fl="id,generative_objective,objeto",
+            fl="id," + ",".join(text_fields),
             rows=len(doc_ids),
         )
         if sc != 200 or not results.docs:
@@ -1814,7 +1897,7 @@ class SIASolrClient(SolrClient):
 
         computed = {}
         for doc in results.docs:
-            text = doc.get("generative_objective") or doc.get("objeto")
+            text = next((doc.get(f) for f in text_fields if doc.get(f)), None)
             if not text:
                 self.logger.warning(
                     f"-- -- No text field found for doc {doc['id']}, skipping embedding computation."
@@ -1886,12 +1969,13 @@ class SIASolrClient(SolrClient):
         """Helper that reproduces the core of do_Q21 given an already calculated embedding."""
         start, rows = self.custom_start_and_rows(start, rows, corpus_col)
 
+        fl = self._get_display_fl(corpus_col)
         if keyword is None:
-            q_obj = self.querier.customize_Q21(doc_embeddings=emb, start=start, rows=rows)
+            q_obj = self.querier.customize_Q21(doc_embeddings=emb, start=start, rows=rows, fl=fl)
         else:
             q_obj = self.querier.customize_Q21_e(
                 doc_embeddings=emb, keyword=keyword,
-                query_fields=query_fields, start=start, rows=rows
+                query_fields=query_fields, start=start, rows=rows, fl=fl
             )
 
         params = {k: v for k, v in q_obj.items() if k != 'q'}

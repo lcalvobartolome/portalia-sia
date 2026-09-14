@@ -50,8 +50,11 @@ path_source=/mnt/data_place
 id_field=id
 title_field=title
 date_field=updated
-MetadataDisplayed=id,title,link
+MetadataDisplayed=id,title,link,expediente,generative_objective
 SearcheableField=id,title
+embedding_text_fields=generative_objective,objeto
+capabilities=metadata,semantic_by_text,semantic_by_document,indicators
+secondary_id_fields=expediente
 
 [bdns-config]
 path_source=/mnt/data_bdns
@@ -60,3 +63,6 @@ title_field=descripcion
 date_field=fecha_registro
 MetadataDisplayed=id,title,link,finalidad,organo_entidad,organo_ambito,presupuesto_total,plazo_fin_efectivo
 SearcheableField=id,title,bases_reguladoras,organo_entidad,finalidad
+embedding_text_fields=descripcion
+capabilities=metadata,semantic_by_text,semantic_by_document
+secondary_id_fields=codigo_bdns

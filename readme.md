@@ -30,6 +30,12 @@ Intelligence and Analysis System for Public Procurement and Aid (from Spanish, *
   - [Commands](#commands)
     - [To index a corpus](#to-index-a-corpus)
     - [To launch the extract pipeline](#to-launch-the-extract-pipeline)
+  - [Exploitation Services (search \& indicators)](#exploitation-services-search--indicators)
+    - [Discover what a corpus supports](#discover-what-a-corpus-supports)
+    - [Get document metadata](#get-document-metadata)
+    - [Semantic search by text](#semantic-search-by-text)
+    - [Semantic search by document(s)](#semantic-search-by-documents)
+    - [Indicators (place only)](#indicators-place-only)
 
 ## Documentation
 
@@ -333,3 +339,193 @@ curl -X 'POST' \
   "ollama_host": "<ollama_host_url>"
 }'
 ```
+
+## Exploitation Services (search & indicators)
+
+All endpoints below live under `/exploitation` and work against either corpus collection (`place` or `bdns`) via the `corpus_collection` path segment, unless noted otherwise. What each collection actually supports is declared per corpus in `sia-config/config.cf` (`capabilities=` key) — query the endpoint below instead of hardcoding assumptions about a collection in your client.
+
+### Discover what a corpus supports
+
+```
+curl -X 'GET' \
+  'http://<host>:<port>/exploitation/corpora/place/capabilities' \
+  -H 'accept: application/json' \
+  -H 'X-API-Key: <your-api-key>'
+```
+
+```
+{
+  "success": true,
+  "message": null,
+  "data": {
+    "corpus": "place",
+    "capabilities": ["indicators", "metadata", "semantic_by_document", "semantic_by_text"],
+    "secondary_id_fields": ["expediente"]
+  }
+}
+```
+
+The same call for `bdns` returns `"capabilities": ["metadata", "semantic_by_document", "semantic_by_text"]`
+(no `indicators`, since indicators rely on procurement-specific fields — budget,
+CPV, award data — that BDNS grants don't have) and `"secondary_id_fields": ["codigo_bdns"]`.
+`secondary_id_fields` lists the alternate identifier(s) — besides the canonical
+`id` — that a document can be looked up by in that corpus; none are hardcoded
+in the API, they're declared per corpus in `sia-config/config.cf`
+(`secondary_id_fields=`) and used as the `secondary_field` in
+`GET .../documents` or as keys in `secondary_ids` in
+`POST .../semantic/by-document` below.
+
+### Get document metadata
+
+```
+curl -X 'GET' \
+  'http://<host>:<port>/exploitation/corpora/place/documents?id=<place_doc_id>' \
+  -H 'accept: application/json' \
+  -H 'X-API-Key: <your-api-key>'
+```
+
+Or look it up by the corpus' alternate identifier instead of `id`:
+
+```
+curl -X 'GET' \
+  'http://<host>:<port>/exploitation/corpora/place/documents?secondary_field=expediente&secondary_value=2025/180' \
+  -H 'accept: application/json' \
+  -H 'X-API-Key: <your-api-key>'
+```
+
+```
+curl -X 'GET' \
+  'http://<host>:<port>/exploitation/corpora/bdns/documents?secondary_field=codigo_bdns&secondary_value=<codigo_bdns_value>' \
+  -H 'accept: application/json' \
+  -H 'X-API-Key: <your-api-key>'
+```
+
+### Semantic search by text
+
+Same request shape for both collections — only `corpus_collection` and the
+filters that make sense for that domain (CPV/procurement vs. grant-specific
+metadata) change.
+
+**PLACE example** (procurement):
+
+```
+curl -X 'POST' \
+  'http://<host>:<port>/exploitation/corpora/place/semantic/by-text' \
+  -H 'accept: application/json' \
+  -H 'X-API-Key: <your-api-key>' \
+  -H 'Content-Type: application/json' \
+  -d '{
+  "query_text": "inteligencia artificial en contratacion publica",
+  "filters": {"date": "2025", "cpv": "72*"},
+  "pagination": {"start": 0, "rows": 10}
+}'
+```
+
+**BDNS example** (grants — no `cpv`, filter on grant-specific fields instead via `extra`):
+
+```
+curl -X 'POST' \
+  'http://<host>:<port>/exploitation/corpora/bdns/semantic/by-text' \
+  -H 'accept: application/json' \
+  -H 'X-API-Key: <your-api-key>' \
+  -H 'Content-Type: application/json' \
+  -d '{
+  "query_text": "ayudas para la transicion energetica en pymes",
+  "filters": {"date": "2025", "extra": {"organo_entidad": "Ministerio de Industria"}},
+  "pagination": {"start": 0, "rows": 10}
+}'
+```
+
+### Semantic search by document(s)
+
+Same request shape for both collections. Besides `doc_ids`, you can resolve
+documents via `secondary_ids` — a dict keyed by the corpus' alternate
+identifier field name (from `GET .../capabilities`), so each corpus passes
+whatever field(s) it actually has instead of a one-size-fits-all name.
+
+> **Backward compatibility**: the old `expediente` query param (on
+> `GET .../documents`) and `expedientes` body field (on
+> `POST .../semantic/by-document`) still work — they're deprecated aliases
+> for `secondary_field='expediente'`/`secondary_value=...` and
+> `secondary_ids={'expediente': [...]}` respectively, and only apply to
+> corpora that declare `expediente` as a secondary id field (i.e. `place`).
+
+**PLACE example** (by `doc_ids`):
+
+```
+curl -X 'POST' \
+  'http://<host>:<port>/exploitation/corpora/place/semantic/by-document' \
+  -H 'accept: application/json' \
+  -H 'X-API-Key: <your-api-key>' \
+  -H 'Content-Type: application/json' \
+  -d '{
+  "doc_ids": ["<place_doc_id>"],
+  "filters": {"date": "2025"},
+  "pagination": {"start": 0, "rows": 10}
+}'
+```
+
+**PLACE example** (by `expediente`, place's secondary identifier field):
+
+```
+curl -X 'POST' \
+  'http://<host>:<port>/exploitation/corpora/place/semantic/by-document' \
+  -H 'accept: application/json' \
+  -H 'X-API-Key: <your-api-key>' \
+  -H 'Content-Type: application/json' \
+  -d '{
+  "secondary_ids": {"expediente": ["2025/180"]},
+  "filters": {"date": "2025"},
+  "pagination": {"start": 0, "rows": 10}
+}'
+```
+
+**BDNS example** (by `doc_ids`):
+
+```
+curl -X 'POST' \
+  'http://<host>:<port>/exploitation/corpora/bdns/semantic/by-document' \
+  -H 'accept: application/json' \
+  -H 'X-API-Key: <your-api-key>' \
+  -H 'Content-Type: application/json' \
+  -d '{
+  "doc_ids": ["<bdns_doc_id>"],
+  "filters": {"date": "2025"},
+  "pagination": {"start": 0, "rows": 10}
+}'
+```
+
+**BDNS example** (by `codigo_bdns`, bdns's secondary identifier field):
+
+```
+curl -X 'POST' \
+  'http://<host>:<port>/exploitation/corpora/bdns/semantic/by-document' \
+  -H 'accept: application/json' \
+  -H 'X-API-Key: <your-api-key>' \
+  -H 'Content-Type: application/json' \
+  -d '{
+  "secondary_ids": {"codigo_bdns": ["<codigo_bdns_value>"]},
+  "filters": {"date": "2025"},
+  "pagination": {"start": 0, "rows": 10}
+}'
+```
+
+For a reference document that isn't yet indexed with an embedding, the text used to compute one on the fly is read per corpus from `embedding_text_fields` in `sia-config/config.cf` (`generative_objective`/`objeto` for `place`, `descripcion` for `bdns`) — no client-side branching needed.
+
+### Indicators (place only)
+
+```
+curl -X 'POST' \
+  'http://<host>:<port>/exploitation/indicators/total-procurement' \
+  -H 'accept: application/json' \
+  -H 'X-API-Key: <your-api-key>' \
+  -H 'Content-Type: application/json' \
+  -d '{
+  "date_start": "2025-01-01T00:00:00Z",
+  "date_end": "2026-01-01T00:00:00Z",
+  "tender_type": "insiders",
+  "cpv_prefixes": ["48", "72"]
+}'
+```
+
+Indicators have no `corpus_collection` parameter since they only ever run against `place`. The endpoint `GET /exploitation/corpora/{corpus}/capabilities` can be checked to show indicator-related features for a given corpus.

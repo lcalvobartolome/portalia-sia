@@ -720,7 +720,8 @@ class Queries(object):
         self,
         doc_embeddings: str,
         start: str,
-        rows: str
+        rows: str,
+        fl: Optional[str] = None,
     ) -> dict:
         """Customizes query Q21 'getDocsSimilarToFreeTextEmb'
 
@@ -734,6 +735,11 @@ class Queries(object):
             Start value.
         rows: str
             Number of rows to retrieve.
+        fl: str, optional
+            Fields to return, overriding the corpus-agnostic template
+            default. Callers should build this from the corpus' own
+            MetadataDisplayed config so results carry that corpus' actual
+            display fields instead of a fixed, PLACE-shaped field list.
 
         Returns
         -------
@@ -743,7 +749,7 @@ class Queries(object):
 
         custom_q21 = {
             'q': self.Q21['q'].format(doc_embeddings),
-            'fl': self.Q21['fl'],
+            'fl': fl or self.Q21['fl'],
             'start': self.Q21['start'].format(start),
             'rows': self.Q21['rows'].format(rows),
         }
@@ -755,7 +761,8 @@ class Queries(object):
         keyword: str,
         start: str,
         rows: str,
-        query_fields: str
+        query_fields: str,
+        fl: Optional[str] = None,
     ) -> dict:
         """Customizes query Q21_e 'getDocsSimilarToFreeTextEmbAndBM25'
 
@@ -769,6 +776,9 @@ class Queries(object):
             Start value.
         rows: str
             Number of rows to retrieve.
+        fl: str, optional
+            Fields to return, overriding the corpus-agnostic template
+            default (see `customize_Q21`).
 
         Returns
         -------
@@ -779,7 +789,7 @@ class Queries(object):
         custom_q21_e = {
             'q': self.Q21_e['q'].format(doc_embeddings),
             'fq': self.Q21_e['fq'].format(query_fields, keyword),
-            'fl': self.Q21_e['fl'],
+            'fl': fl or self.Q21_e['fl'],
             'start': self.Q21_e['start'].format(start),
             'rows': self.Q21_e['rows'].format(rows),
         }

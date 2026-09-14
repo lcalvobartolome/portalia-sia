@@ -26,6 +26,7 @@ from fastapi import APIRouter, Body, Path, Query, Request  # type: ignore
 from src.api.schemas import (
     DataResponse,
     IndicatorRequest,
+    CorpusCapability,
     # Search request schemas
     SemanticSearchByTextRequest,
     #ThematicSearchByTextRequest,
@@ -79,6 +80,42 @@ def _require_tender_type(
             f"Indicator '{indicator}' is only available for "
             f"tender_type in [{allowed_str}]. "
             f"Received: {body.tender_type!r}."
+        )
+
+
+def _require_capability(sc, corpus_collection: str, capability: CorpusCapability) -> None:
+    """
+    Raise NotFoundException / ValidationException if the given corpus
+    collection does not declare support for `capability` (see
+    GET /corpora/{corpus_collection}/capabilities and the corpus'
+    `capabilities=` key in config.cf).
+    """
+    result, status = sc.get_corpus_capabilities(corpus_col=corpus_collection)
+    if status != 200:
+        raise NotFoundException(f"Corpus '{corpus_collection}' not found")
+    if capability.value not in result["capabilities"]:
+        raise ValidationException(
+            f"Corpus '{corpus_collection}' does not support '{capability.value}'. "
+            f"Supported: {', '.join(result['capabilities']) or 'none'}."
+        )
+
+
+def _require_secondary_field(sc, corpus_collection: str, field: str) -> None:
+    """
+    Raise NotFoundException / ValidationException if `field` is not one of
+    the alternate identifier fields declared for this corpus (see
+    GET /corpora/{corpus_collection}/capabilities and the corpus'
+    `secondary_id_fields=` key in config.cf, e.g. 'expediente' for place,
+    'codigo_bdns' for bdns).
+    """
+    result, status = sc.get_corpus_capabilities(corpus_col=corpus_collection)
+    if status != 200:
+        raise NotFoundException(f"Corpus '{corpus_collection}' not found")
+    valid_fields = result["secondary_id_fields"]
+    if field not in valid_fields:
+        raise ValidationException(
+            f"'{field}' is not a valid secondary identifier for corpus '{corpus_collection}'. "
+            f"Valid: {', '.join(valid_fields) or 'none'}."
         )
 
 
@@ -154,8 +191,8 @@ def _semantic_by_text_examples() -> dict:
     """Examples for semantic search by free text."""
     return _search_examples(
         (
-            "AI procurement with filters",
-            "Semantic search with date, CPV and extra metadata filters",
+            "PLACE - AI procurement with filters",
+            "[corpus_collection=place] Semantic search with date, CPV and extra metadata filters",
             {
                 "query_text": "inteligencia artificial en contratacion publica",
                 "filters": {
@@ -167,10 +204,31 @@ def _semantic_by_text_examples() -> dict:
             },
         ),
         (
-            "Cybersecurity without filters",
-            "Semantic search using only the query text",
+            "PLACE - Cybersecurity without filters",
+            "[corpus_collection=place] Semantic search using only the query text",
             {
                 "query_text": "servicios de ciberseguridad y monitorizacion",
+                "pagination": {"start": 0, "rows": 5},
+            },
+        ),
+        (
+            "BDNS - Energy transition grants with filters",
+            "[corpus_collection=bdns] Semantic search with date and grant-specific "
+            "metadata filters (BDNS has no 'cpv' field, use 'extra' instead)",
+            {
+                "query_text": "ayudas para la transicion energetica en pymes",
+                "filters": {
+                    "date": "2025",
+                    "extra": {"organo_entidad": "Ministerio de Industria"},
+                },
+                "pagination": {"start": 0, "rows": 10},
+            },
+        ),
+        (
+            "BDNS - R&D grants without filters",
+            "[corpus_collection=bdns] Semantic search using only the query text",
+            {
+                "query_text": "subvenciones para proyectos de I+D+i",
                 "pagination": {"start": 0, "rows": 5},
             },
         ),
@@ -200,8 +258,8 @@ def _semantic_by_document_examples() -> dict:
     """Examples for semantic similarity by existing document IDs."""
     return _search_examples(
         (
-            "By document IDs",
-            "Semantic similarity aggregated from three indexed documents",
+            "PLACE - By document IDs",
+            "[corpus_collection=place] Semantic similarity aggregated from three indexed documents",
             {
                 "doc_ids": [
                     "https://contrataciondelestado.es/sindicacion/licitacionesPerfilContratante/17311447",
@@ -216,11 +274,12 @@ def _semantic_by_document_examples() -> dict:
             },
         ),
         (
-            "By expediente",
-            "Resolve expediente to all matching documents and find similar ones",
+            "PLACE - By expediente",
+            "[corpus_collection=place] Resolve an 'expediente' (place's secondary "
+            "identifier field) to all matching documents and find similar ones",
             {
                 "doc_ids": [],
-                "expedientes": ["2025-9923", "Z25AU051/F2F", "2025-9923"],
+                "secondary_ids": {"expediente": ["2025-9923", "Z25AU051/F2F"]},
                 "filters": {
                     "date": "2025",
                 },
@@ -228,11 +287,36 @@ def _semantic_by_document_examples() -> dict:
             },
         ),
         (
-            "Mixed IDs and expedientes",
-            "Combine explicit document IDs with expediente resolution",
+            "PLACE - Mixed IDs and expedientes",
+            "[corpus_collection=place] Combine explicit document IDs with expediente resolution",
             {
                 "doc_ids": ["https://contrataciondelestado.es/sindicacion/licitacionesPerfilContratante/17311447"],
-                "expedientes": ["Z25AU051/F2F", "2025-9923"],
+                "secondary_ids": {"expediente": ["Z25AU051/F2F", "2025-9923"]},
+                "pagination": {"start": 0, "rows": 10},
+            },
+        ),
+        (
+            "BDNS - By document IDs",
+            "[corpus_collection=bdns] Semantic similarity aggregated from indexed grant documents.",
+            {
+                "doc_ids": ["<bdns_doc_id_1>", "<bdns_doc_id_2>"],
+                "filters": {
+                    "date": "2025",
+                },
+                "pagination": {"start": 0, "rows": 10},
+            },
+        ),
+        (
+            "BDNS - By codigo_bdns",
+            "[corpus_collection=bdns] Resolve a 'codigo_bdns' (bdns's secondary "
+            "identifier field, analogous to 'expediente' in place) to all matching "
+            "documents and find similar ones",
+            {
+                "doc_ids": [],
+                "secondary_ids": {"codigo_bdns": ["<codigo_bdns_1>", "<codigo_bdns_2>"]},
+                "filters": {
+                    "date": "2025",
+                },
                 "pagination": {"start": 0, "rows": 10},
             },
         ),
@@ -265,13 +349,16 @@ def _semantic_by_document_examples() -> dict:
 @router.get(
     "/corpora/{corpus_collection}/documents",
     response_model=DataResponse,
-    summary="Get document metadata by ID or expediente",
+    summary="Get document metadata by ID or alternate identifier",
     description=(
         "Retrieve all metadata associated with a specific document. "
-        "Provide either 'id' or 'expediente' (one is required)."
+        "Provide either 'id', or both 'secondary_field' and 'secondary_value' "
+        "(one of the two is required). The valid 'secondary_field' names are "
+        "corpus-specific — see GET /corpora/{corpus_collection}/capabilities "
+        "(e.g. 'expediente' for place, 'codigo_bdns' for bdns)."
     ),
     responses=error_responses(
-        NotFoundException, SolrException,
+        NotFoundException, ValidationException, SolrException,
         NotFoundException="Document or corpus not found",
     ),
 )
@@ -283,21 +370,48 @@ async def get_document_metadata(
         description="Document ID",
         examples=["https://contrataciondelestado.es/sindicacion/PlataformasAgregadasSinMenores/19192364"],
     ),
+    secondary_field: str = Query(
+        None,
+        description="Name of an alternate identifier field for this corpus "
+                     "(see GET .../capabilities for the valid names, e.g. "
+                     "'expediente' for place, 'codigo_bdns' for bdns)",
+        examples=["expediente"],
+    ),
+    secondary_value: str = Query(
+        None,
+        description="Value to match against 'secondary_field'",
+        examples=["2025/180"],
+    ),
     expediente: str = Query(
         None,
-        description="Expediente number",
+        deprecated=True,
+        description=(
+            "Deprecated — use secondary_field='expediente'&secondary_value=... instead. "
+            "Kept for backward compatibility; only valid for corpora that declare "
+            "'expediente' as a secondary_id_field (e.g. 'place')."
+        ),
         examples=["2025/180"],
     ),
 ) -> DataResponse:
-    """Get document metadata by ID or expediente."""
-    if id is None and expediente is None:
-        raise NotFoundException("Provide either 'id' or 'expediente'")
+    """Get document metadata by ID or alternate identifier."""
+    # Backward-compatible alias: deprecated 'expediente' maps onto the
+    # generic secondary_field/secondary_value pair when those aren't given.
+    if expediente is not None and secondary_field is None:
+        secondary_field, secondary_value = "expediente", expediente
+
+    if id is None and (secondary_field is None or secondary_value is None):
+        raise NotFoundException(
+            "Provide either 'id', or both 'secondary_field' and 'secondary_value'"
+        )
     sc = request.app.state.solr_client
     try:
+        if secondary_field is not None:
+            _require_secondary_field(sc, corpus_collection, secondary_field)
         result = sc.do_Q6(
             corpus_col=corpus_collection,
             doc_id=id,
-            expediente=expediente,
+            secondary_field=secondary_field,
+            secondary_value=secondary_value,
         )
         return DataResponse(success=True, data=result)
     except APIException:
@@ -331,6 +445,39 @@ async def get_corpus_metadata_fields(
         raise_internal_solr(e, log=logger)
 
 
+@router.get(
+    "/corpora/{corpus_collection}/capabilities",
+    response_model=DataResponse,
+    summary="Get corpus capabilities",
+    description=(
+        "Returns which exploitation features (metadata queries, semantic search, "
+        "indicators) are available for this corpus collection. For example, "
+        "indicators are only available for 'place' since they rely on "
+        "procurement-specific fields (budget, CPV, award data) that BDNS "
+        "grants don't have."
+    ),
+    responses=error_responses(
+        NotFoundException, SolrException,
+        NotFoundException="Corpus not found",
+    ),
+)
+async def get_corpus_capabilities(
+    request: Request,
+    corpus_collection: str = Path(..., description="Corpus collection name", examples=["place"]),
+) -> DataResponse:
+    """Get the exploitation features available for a corpus."""
+    sc = request.app.state.solr_client
+    try:
+        result, status = sc.get_corpus_capabilities(corpus_col=corpus_collection)
+        if status != 200:
+            raise NotFoundException(f"Corpus '{corpus_collection}' not found")
+        return DataResponse(success=True, data=result)
+    except APIException:
+        raise
+    except Exception as e:
+        raise_internal_solr(e, log=logger)
+
+
 # ======================================================
 # Semantic Search
 # ======================================================
@@ -343,7 +490,7 @@ async def get_corpus_metadata_fields(
         "CPV code, and additional metadata."
     ),
     responses=error_responses(
-        NotFoundException, SolrException,
+        NotFoundException, ValidationException, SolrException,
         NotFoundException="Corpus not found",
     ),
     openapi_extra=_semantic_by_text_examples(),
@@ -356,6 +503,7 @@ async def semantic_search_by_text(
     """Semantic search using BERT embeddings."""
     sc = request.app.state.solr_client
     try:
+        _require_capability(sc, corpus_collection, CorpusCapability.SEMANTIC_BY_TEXT)
         result = sc.do_Q21(
             corpus_col=corpus_collection,
             search_doc=body.query_text,
@@ -413,15 +561,16 @@ async def semantic_search_by_text(
 @router.post(
     "/corpora/{corpus_collection}/semantic/by-document",
     response_model=DataResponse,
-    summary="Semantically similar documents by document ID(s) or expediente(s)",
+    summary="Semantically similar documents by document ID(s) or alternate identifier(s)",
     description=(
         "Find documents semantically similar to one or more existing indexed "
-        "documents. Accepts a list of IDs and/or expedientes as reference points. "
-        "Results can be filtered by year, "
+        "documents. Accepts a list of IDs and/or secondary_ids (alternate "
+        "identifiers, keyed by corpus-specific field name — see GET .../capabilities) "
+        "as reference points. Results can be filtered by year, "
         "CPV code, and additional metadata."
     ),
     responses=error_responses(
-        NotFoundException, SolrException,
+        NotFoundException, ValidationException, SolrException,
         NotFoundException="Document, corpus or model not found",
     ),
     openapi_extra=_semantic_by_document_examples(),
@@ -434,17 +583,26 @@ async def similar_documents_by_id(
     """Find documents semantically similar to one or more existing documents."""
     sc = request.app.state.solr_client
     try:
+        _require_capability(sc, corpus_collection, CorpusCapability.SEMANTIC_BY_DOCUMENT)
         doc_ids = list(body.doc_ids)
 
-        # Resolve expedientes → doc IDs (one expediente may match several docs)
-        for exp in (body.expedientes or []):
-            resolved = sc.do_Q6(corpus_col=corpus_collection, expediente=exp)
-            if resolved:
-                docs, _ = resolved
-                doc_ids.extend(d["id"] for d in docs if "id" in d)
+        # Merge deprecated 'expedientes' into secondary_ids for backward compatibility
+        secondary_ids = {k: list(v) for k, v in (body.secondary_ids or {}).items()}
+        if body.expedientes:
+            secondary_ids.setdefault("expediente", [])
+            secondary_ids["expediente"].extend(body.expedientes)
+
+        # Resolve secondary_ids → doc IDs (one identifier may match several docs)
+        for field, values in secondary_ids.items():
+            _require_secondary_field(sc, corpus_collection, field)
+            for value in values:
+                resolved = sc.do_Q6(corpus_col=corpus_collection, secondary_field=field, secondary_value=value)
+                if resolved:
+                    docs, _ = resolved
+                    doc_ids.extend(d["id"] for d in docs if "id" in d)
 
         if not doc_ids:
-            raise NotFoundException("No documents found for the provided IDs or expedientes")
+            raise NotFoundException("No documents found for the provided IDs or secondary_ids")
 
         result = sc.do_Q21_by_doc(
             corpus_col=corpus_collection,
@@ -682,7 +840,8 @@ def _indicator_examples_insiders_only() -> dict:
     summary="Total procurement indicator",
     description=(
         "Count of tenders and aggregated budget per bimester. "
-        "Filter by source, CPV, date range, geography or contracting authority."
+        "Filter by source, CPV, date range, geography or contracting authority. "
+        "Only available for the 'place' corpus — see GET /corpora/place/capabilities."
     ),
     responses=error_responses(
         ValidationException, SolrException,
@@ -726,7 +885,8 @@ async def calculate_indicator_total_procurement(
     description=(
         "Percentage of lots with exactly one offer received, per bimester. "
         "Includes field coverage statistics. "
-        "Filter by source, CPV, date range, geography or contracting authority."
+        "Filter by source, CPV, date range, geography or contracting authority. "
+        "Only available for the 'place' corpus — see GET /corpora/place/capabilities."
     ),
     responses=error_responses(ValidationException, SolrException),
     openapi_extra=_indicator_examples(),
@@ -768,7 +928,8 @@ async def calculate_indicator_single_bidder(
     summary="Decision speed indicator",
     description=(
         "Average days between submission deadline and award decision, per bimester. "
-        "Filter by source, CPV, date range, geography or contracting authority."
+        "Filter by source, CPV, date range, geography or contracting authority. "
+        "Only available for the 'place' corpus — see GET /corpora/place/capabilities."
     ),
     responses=error_responses(ValidationException, SolrException),
     openapi_extra=_indicator_examples_insiders_only(),
@@ -812,7 +973,8 @@ async def calculate_indicator_decision_speed(
     description=(
         "Percentage of procedures awarded via 'Negociado sin publicidad', per bimester. "
         "Includes field coverage statistics. "
-        "Filter by source, CPV, date range, geography or contracting authority."
+        "Filter by source, CPV, date range, geography or contracting authority. "
+        "Only available for the 'place' corpus — see GET /corpora/place/capabilities."
     ),
     responses=error_responses(ValidationException, SolrException),
     openapi_extra=_indicator_examples(),
@@ -854,7 +1016,8 @@ async def calculate_indicator_direct_awards(
     summary="TED publication indicator",
     description=(
         "Percentage of procedures published in the EU TED portal, per bimester. "
-        "Filter by source, CPV, date range, geography or contracting authority."
+        "Filter by source, CPV, date range, geography or contracting authority. "
+        "Only available for the 'place' corpus — see GET /corpora/place/capabilities."
     ),
     responses=error_responses(ValidationException, SolrException),
     openapi_extra=_indicator_examples(),
@@ -897,7 +1060,8 @@ async def calculate_indicator_ted_publication(
     description=(
         "Percentage of lots with at least one SME offer, per bimester. "
         "Includes field coverage statistics. "
-        "Filter by source, CPV, date range, geography or contracting authority."
+        "Filter by source, CPV, date range, geography or contracting authority. "
+        "Only available for the 'place' corpus — see GET /corpora/place/capabilities."
     ),
     responses=error_responses(ValidationException, SolrException),
     openapi_extra=_indicator_examples_insiders_only(),
@@ -941,7 +1105,8 @@ async def calculate_indicator_sme_participation(
     description=(
         "Percentage of all offers submitted by SMEs, per bimester. "
         "Includes field coverage statistics. "
-        "Filter by source, CPV, date range, geography or contracting authority."
+        "Filter by source, CPV, date range, geography or contracting authority. "
+        "Only available for the 'place' corpus — see GET /corpora/place/capabilities."
     ),
     responses=error_responses(ValidationException, SolrException),
     openapi_extra=_indicator_examples_insiders_only(),
@@ -985,7 +1150,8 @@ async def calculate_indicator_sme_offer_ratio(
     description=(
         "Percentage of procedures divided into more than one lot, per bimester. "
         "Includes field coverage statistics. "
-        "Filter by source, CPV, date range, geography or contracting authority."
+        "Filter by source, CPV, date range, geography or contracting authority. "
+        "Only available for the 'place' corpus — see GET /corpora/place/capabilities."
     ),
     responses=error_responses(ValidationException, SolrException),
     openapi_extra=_indicator_examples(),
@@ -1028,7 +1194,8 @@ async def calculate_indicator_lots_division(
     description=(
         "Percentage of awarded lots where the supplier identifier is absent, "
         "per bimester. "
-        "Filter by source, CPV, date range, geography or contracting authority."
+        "Filter by source, CPV, date range, geography or contracting authority. "
+        "Only available for the 'place' corpus — see GET /corpora/place/capabilities."
     ),
     responses=error_responses(ValidationException, SolrException),
     openapi_extra=_indicator_examples(),
@@ -1071,7 +1238,8 @@ async def calculate_indicator_missing_supplier_id(
     description=(
         "Percentage of procedures where the contracting authority identifier "
         "is absent, per bimester. "
-        "Filter by source, CPV, date range, geography or contracting authority."
+        "Filter by source, CPV, date range, geography or contracting authority. "
+        "Only available for the 'place' corpus — see GET /corpora/place/capabilities."
     ),
     responses=error_responses(ValidationException, SolrException),
     openapi_extra=_indicator_examples(),

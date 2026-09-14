@@ -30,6 +30,17 @@ class QueryOperator(str, Enum):
     OR = "OR"
 
 
+class CorpusCapability(str, Enum):
+    """
+    Exploitation features that may or may not be available for a given
+    corpus collection, declared per corpus in config.cf.
+    """
+    METADATA = "metadata"
+    SEMANTIC_BY_TEXT = "semantic_by_text"
+    SEMANTIC_BY_DOCUMENT = "semantic_by_document"
+    INDICATORS = "indicators"
+
+
 # ══════════════════════════════════════════════════════
 #  RESPONSE SCHEMAS
 # ══════════════════════════════════════════════════════
@@ -360,12 +371,29 @@ class SimilarByDocumentRequest(SearchRequestBase):
     """
     Request for finding documents similar to one or more existing documents.
 
-    Accepts document IDs and/or expediente numbers as reference. When
-    expedientes are provided, all documents matching each expediente are
-    resolved first and included as reference documents.
+    Accepts document IDs and/or alternate identifiers as reference. When
+    secondary_ids are provided, all documents matching each are resolved
+    first and included as reference documents.
     """
     doc_ids: List[str] = Field(default_factory=list, description="One or more reference document IDs")
-    expedientes: Optional[List[str]] = Field(None, description="One or more expediente numbers to resolve into document IDs")
+    secondary_ids: Optional[Dict[str, List[str]]] = Field(
+        None,
+        description=(
+            "Alternate identifiers to resolve into doc_ids, keyed by the corpus-specific "
+            "field name (see GET /corpora/{corpus_collection}/capabilities for the valid "
+            "names per corpus), e.g. {'expediente': ['2025/180']} for 'place' or "
+            "{'codigo_bdns': ['123456']} for 'bdns'."
+        ),
+    )
+    expedientes: Optional[List[str]] = Field(
+        None,
+        deprecated=True,
+        description=(
+            "Deprecated — use secondary_ids={'expediente': [...]} instead. "
+            "Kept for backward compatibility; only valid for corpora that declare "
+            "'expediente' as a secondary_id_field (e.g. 'place')."
+        ),
+    )
     model_name: Optional[str] = Field(None, description="Topic model name (required for thematic similarity)")
 
     class Config:
@@ -375,7 +403,7 @@ class SimilarByDocumentRequest(SearchRequestBase):
                     "https://contrataciondelestado.es/sindicacion/licitacionesPerfilContratante/17311447",
                     "https://contrataciondelestado.es/sindicacion/licitacionesPerfilContratante/17716704",
                 ],
-                "expedientes": ["2025/180"],
+                "secondary_ids": {"expediente": ["2025/180"]},
                 "filters": {"date": "2024"},
                 "pagination": {"start": 0, "rows": 10},
             }
