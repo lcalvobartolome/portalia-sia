@@ -444,7 +444,7 @@ curl -X 'POST' \
   -H 'Content-Type: application/json' \
   -d '{
   "query_text": "ayudas para la transicion energetica en pymes",
-  "filters": {"date": "2025", "extra": {"organo_entidad": "Ministerio de Industria"}},
+  "filters": {"date": "2025", "extra": {"organo_entidad": "Industria y Energía"}},
   "pagination": {"start": 0, "rows": 10}
 }'
 ```

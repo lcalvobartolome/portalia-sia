@@ -1,0 +1,122 @@
+networks:
+  sia-net:
+    name: sia-net
+
+services:
+  sia-core-api:
+    image: ${SIA_CORE_API_IMAGE:-sia-core-api:latest}
+    build:
+      context: ./sia-core-api
+      args:
+        APP_UID: ${APP_UID:-1000}
+        APP_GID: ${APP_GID:-1000}
+        PIPELINE_REF: ${PIPELINE_REF:-main}
+      secrets:
+        - github_token
+    container_name: sia-core-api
+    user: "${APP_UID:-1000}:${APP_GID:-1000}"
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    # Bound log retention on the host
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+    ports:
+      - 10083:10083
+    environment:
+      NVIDIA_DRIVER_CAPABILITIES: compute,utility # needed in Lt2
+      SOLR_URL: http://solr:8983
+      SIA_MASTER_KEY: ${SIA_MASTER_KEY:-master-key-change-in-production}
+      API_KEYS_FILE: /config/api_keys.json
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:3000,http://localhost:8080}
+      # Must match the target of the pipeline_jobs.db bind mount below, or the job store silently falls back to /mnt/data_place/pipeline_jobs.db.
+      PIPELINE_DB_PATH: /data/pipeline_jobs.db
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      - solr
+    networks:
+      - sia-net
+    volumes:
+      - ${SIA_DATA_DIR:-./data}/:/mnt/data_place
+      - ${SIA_BDNS_DATA_DIR:-./data_bdns}/:/mnt/data_bdns
+      - ./sia-config:/config
+      - ./db/data/sqlite3/pipeline_jobs.db:/data/pipeline_jobs.db
+    deploy:
+      resources:
+        limits:
+          memory: 100GB
+
+  solr:
+    image: ${SOLR_IMAGE:-sia-solr:9.1.1}
+    build:
+      context: ./solr-plugins/NP-solr-dist-plugin
+    container_name: sia-solr
+    restart: always
+    user: "${APP_UID:-1000}:${APP_GID:-1000}"
+    security_opt:
+      - no-new-privileges:true # IDX-002
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+    volumes:
+      - ${SOLR_DATA_DIR:-./db/data/solr}:/var/solr
+      - ./solr-config:/opt/solr/server/solr
+      - ./solr-config/solr.in.sh:/etc/default/solr.in.sh
+    ports:
+      - 10085:8983
+    entrypoint:
+      - docker-entrypoint.sh
+      - solr
+      - start
+      - -f
+      - -c
+      - -z
+      - zoo:2181
+      - -a
+      - "-Xdebug -Xrunjdwp:transport=dt_socket,server=y,suspend=n,address=1044 -Djute.maxbuffer=0x5000000"
+    environment:
+      - SOLR_OPTS=-Dsolr.jetty.request.header.size=65535
+      - SOLR_JAVA_MEM=-Xms1g -Xmx1g
+    networks:
+      - sia-net
+    deploy:
+      resources:
+        limits:
+          memory: 100GB
+
+  zoo:
+    image: ${ZOOKEEPER_IMAGE:-docker.io/library/zookeeper@sha256:4c6f15fbd5491a3e01b0108c046891125553329a4956848ba3014cedff5386ee}
+    container_name: sia-zoo
+    restart: always
+    security_opt:
+      - no-new-privileges:true
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+    ports:
+      - 10086:8080
+      - 10087:2181
+    environment:
+      - JVMFLAGS=-Djute.maxbuffer=50000000
+    volumes:
+      - ./db/data/zoo/data:/data
+      - ./db/data/zoo/logs:/datalog
+    networks:
+      - sia-net
+    deploy:
+      resources:
+        limits:
+          memory: 100GB
+
+secrets:
+  github_token:
+    environment: GITHUB_TOKEN

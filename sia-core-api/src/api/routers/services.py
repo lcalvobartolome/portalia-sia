@@ -140,7 +140,14 @@ def _require_secondary_field(sc, corpus_collection: str, field: str) -> None:
 # ======================================================
 def _date_to_fq(date_value: str) -> str:
     """
-    Convert a date value to a Solr ``updated`` fq clause.
+    Convert a date value to a Solr ``date`` fq clause.
+
+    'date' is the canonical, corpus-agnostic date field every corpus is
+    indexed into (see 'date_field=date' under [restapi] in config.cf) -
+    each corpus' own date_field (e.g. 'updated' for place, 'fecha_registro'
+    for bdns) is only the *source* field name it's copied from at indexing
+    time, not a queryable Solr field on its own (e.g. bdns docs have no
+    'updated' field at all, so filtering on it always matches zero docs).
 
     Accepted formats:
     - 4-digit year (``"2024"``) → range covering the full year.
@@ -149,10 +156,10 @@ def _date_to_fq(date_value: str) -> str:
     """
     if date_value.isdigit() and len(date_value) == 4:
         return (
-            f"updated:[{date_value}-01-01T00:00:00Z"
+            f"date:[{date_value}-01-01T00:00:00Z"
             f" TO {date_value}-12-31T23:59:59Z]"
         )
-    return f"updated:{date_value}"
+    return f"date:{date_value}"
 
 
 def _extra_filter_to_fq(key: str, value: str) -> str:
@@ -176,7 +183,7 @@ def _build_filter_query(
     Build a Solr ``fq`` string from a structured ``MetadataFilter``.
 
     Field mapping:
-    - ``date``  → ``updated`` (see ``_date_to_fq`` for accepted formats)
+    - ``date``  → ``date`` (see ``_date_to_fq`` for accepted formats)
     - ``cpv``   → ``cpv_list``
     - ``extra`` → arbitrary indexed fields (exact match, see ``_extra_filter_to_fq``)
 
@@ -249,7 +256,7 @@ def _semantic_by_text_examples() -> dict:
                 "query_text": "ayudas para la transicion energetica en pymes",
                 "filters": {
                     "date": "2025",
-                    "extra": {"organo_entidad": "MINISTERIO DE INDUSTRIA"},
+                    "extra": {"organo_entidad": "Industria y Energía"},
                 },
                 "pagination": {"start": 0, "rows": 10},
             },
@@ -270,7 +277,7 @@ def _semantic_by_text_examples() -> dict:
                 "query_text": "subvenciones para la edicion de libros",
                 "filters": {
                     "date": "2025",
-                    "extra": {"organo_entidad": "MINISTERIO DE CULTURA"},
+                    "extra": {"organo_entidad": "SANT JAUME DELS DOMENYS"},
                 },
                 "pagination": {"start": 0, "rows": 10},
             },
@@ -577,13 +584,16 @@ async def semantic_search_by_text(
     sc = request.app.state.solr_client
     try:
         _require_capability(sc, corpus_collection, CorpusCapability.SEMANTIC_BY_TEXT)
-        result = sc.do_Q21(
+        result, status = sc.do_Q21(
             corpus_col=corpus_collection,
             search_doc=body.query_text,
             filter_query=_build_filter_query(body.filters),
             start=body.pagination.start,
             rows=body.pagination.rows,
         )
+        if status != 200:
+            logger.error("Solr semantic-by-text query failed (status=%s)", status)
+            raise SolrException("Solr query failed")
         return DataResponse(success=True, data=result)
     except APIException:
         raise

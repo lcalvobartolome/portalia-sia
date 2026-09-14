@@ -306,7 +306,8 @@ class MetadataFilter(BaseModel):
             "(2) exact ISO-8601 timestamp (e.g. '2024-06-15T00:00:00Z'); "
             "(3) explicit Solr range expression "
             "(e.g. '[2024-01-01T00:00:00Z TO 2024-12-31T23:59:59Z]'). "
-            "Maps to the 'updated' field in the index."
+            "Maps to the 'date' field in the index (the canonical, "
+            "corpus-agnostic date field every corpus is indexed into)."
         ),
     )
     cpv: Optional[str] = Field(

@@ -1744,15 +1744,15 @@ class SIASolrClient(SolrClient):
         
         # 1. Check that corpus_col is indeed a corpus collection
         if not self.check_is_corpus(corpus_col):
-            return
-        
+            return None, 400
+
         # 3. Get embedding from search_doc
         embs = self.sia_tools.get_embedding(search_doc)
-        
+
         if embs is None:
             self.logger.error(
                 f"-- -- Error attaining embeddings from {search_doc} while executing query Q21. Aborting operation...")
-            return
+            return None, 500
 
         self.logger.info(
             f"-- -- Embbedings for doc {search_doc} attained.")
@@ -1793,7 +1793,7 @@ class SIASolrClient(SolrClient):
         if sc != 200:
             self.logger.error(
                 f"-- -- Error executing query Q21. Aborting operation...")
-            return
+            return None, sc
 
         return results.docs, sc
     
