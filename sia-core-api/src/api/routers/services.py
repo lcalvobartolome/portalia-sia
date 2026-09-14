@@ -256,7 +256,7 @@ def _semantic_by_text_examples() -> dict:
                 "query_text": "ayudas para la transicion energetica en pymes",
                 "filters": {
                     "date": "2025",
-                    "extra": {"organo_entidad": "Industria y Energía"},
+                    "extra": {"organo_entidad": "MINISTERIO DE INDUSTRIA Y TURISMO"},
                 },
                 "pagination": {"start": 0, "rows": 10},
             },
