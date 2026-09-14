@@ -470,12 +470,17 @@ async def get_document_metadata(
     try:
         if secondary_field is not None:
             _require_secondary_field(sc, corpus_collection, secondary_field)
-        result = sc.do_Q6(
+        result, status = sc.do_Q6(
             corpus_col=corpus_collection,
             doc_id=id,
             secondary_field=secondary_field,
             secondary_value=secondary_value,
         )
+        if status == 400:
+            raise NotFoundException(f"Corpus '{corpus_collection}' not found")
+        if status != 200:
+            logger.error("Solr document-metadata query failed (status=%s)", status)
+            raise SolrException("Solr query failed")
         return DataResponse(success=True, data=result)
     except APIException:
         raise
@@ -488,10 +493,28 @@ async def get_document_metadata(
     response_model=DataResponse,
     summary="Get corpus metadata fields",
     description="Returns the union of all fields present across every document in the corpus, excluding internal fields (doc_hash, _version_).",
-    responses=error_responses(
-        NotFoundException, SolrException,
-        NotFoundException="Corpus not found",
-    ),
+    responses={
+        200: {
+            "content": {
+                "application/json": {
+                    "example": {
+                        "success": True,
+                        "message": None,
+                        "data": {
+                            "metadata_fields": [
+                                "codigo_bdns", "date", "descripcion", "finalidad",
+                                "id", "organo_entidad", "presupuesto_total", "title",
+                            ]
+                        },
+                    }
+                }
+            }
+        },
+        **error_responses(
+            NotFoundException, SolrException,
+            NotFoundException="Corpus not found",
+        ),
+    },
 )
 async def get_corpus_metadata_fields(
     request: Request,
@@ -500,7 +523,12 @@ async def get_corpus_metadata_fields(
     """Get all available metadata fields of a corpus."""
     sc = request.app.state.solr_client
     try:
-        result = sc.get_available_fields(corpus_col=corpus_collection)
+        result, status = sc.get_available_fields(corpus_col=corpus_collection)
+        if status == 400:
+            raise NotFoundException(f"Corpus '{corpus_collection}' not found")
+        if status != 200:
+            logger.error("Solr metadata-fields query failed (status=%s)", status)
+            raise SolrException("Solr query failed")
         return DataResponse(success=True, data=result)
     except APIException:
         raise
@@ -566,8 +594,9 @@ async def get_corpus_capabilities(
     response_model=DataResponse,
     summary="Semantic search by text",
     description=(
-        "Semantic search for documents similar to a given text. Results can be filtered by year, "
-        "CPV code, and additional metadata."
+        "Semantic search for documents similar to a given text. Results can be filtered by "
+        "year and additional metadata (CPV code for 'place'; corpus-specific fields such as "
+        "'organo_entidad' for 'bdns', passed via 'extra')."
     ),
     responses=error_responses(
         NotFoundException, ValidationException, SolrException,
@@ -584,6 +613,8 @@ async def semantic_search_by_text(
     sc = request.app.state.solr_client
     try:
         _require_capability(sc, corpus_collection, CorpusCapability.SEMANTIC_BY_TEXT)
+        if body.filters is not None and body.filters.cpv is not None:
+            _require_capability(sc, corpus_collection, CorpusCapability.CPV_FILTER)
         result, status = sc.do_Q21(
             corpus_col=corpus_collection,
             search_doc=body.query_text,
@@ -648,9 +679,10 @@ async def semantic_search_by_text(
     description=(
         "Find documents semantically similar to one or more existing indexed "
         "documents. Accepts a list of IDs and/or secondary_ids (alternate "
-        "identifiers, keyed by corpus-specific field name — see GET .../capabilities) "
-        "as reference points. Results can be filtered by year, "
-        "CPV code, and additional metadata."
+        "identifiers, keyed by corpus-specific field name, see GET .../capabilities) "
+        "as reference points. Results can be filtered by year and additional metadata "
+        "(CPV code for 'place'; corpus-specific fields such as 'organo_entidad' for "
+        "'bdns', passed via 'extra')."
     ),
     responses=error_responses(
         NotFoundException, ValidationException, SolrException,
@@ -667,6 +699,8 @@ async def similar_documents_by_id(
     sc = request.app.state.solr_client
     try:
         _require_capability(sc, corpus_collection, CorpusCapability.SEMANTIC_BY_DOCUMENT)
+        if body.filters is not None and body.filters.cpv is not None:
+            _require_capability(sc, corpus_collection, CorpusCapability.CPV_FILTER)
         doc_ids = list(body.doc_ids)
 
         # Merge deprecated 'expedientes' into secondary_ids for backward compatibility
@@ -679,9 +713,8 @@ async def similar_documents_by_id(
         for field, values in secondary_ids.items():
             _require_secondary_field(sc, corpus_collection, field)
             for value in values:
-                resolved = sc.do_Q6(corpus_col=corpus_collection, secondary_field=field, secondary_value=value)
-                if resolved:
-                    docs, _ = resolved
+                docs, resolve_status = sc.do_Q6(corpus_col=corpus_collection, secondary_field=field, secondary_value=value)
+                if resolve_status == 200 and docs:
                     doc_ids.extend(d["id"] for d in docs if "id" in d)
 
         if not doc_ids:
@@ -920,7 +953,28 @@ def _indicator_examples_insiders_only() -> dict:
     }
 
 
-@router.post(                          
+def _indicator_response_example(data: dict) -> dict:
+    """
+    Build a 200-response override for an indicator endpoint's `responses=`.
+
+    Every indicator returns a single bimester-bucketed dict (id + parallel
+    arrays), not the generic doc-list shape (id/title/score) that
+    DataResponse's default example shows — that default is what every
+    indicator endpoint would otherwise display in Swagger, which is
+    misleading. Merge the result with `**error_responses(...)`.
+    """
+    return {
+        200: {
+            "content": {
+                "application/json": {
+                    "example": {"success": True, "message": None, "data": data}
+                }
+            }
+        }
+    }
+
+
+@router.post(
     "/indicators/total-procurement",
     response_model=DataResponse,
     summary="Total procurement indicator",
@@ -929,10 +983,20 @@ def _indicator_examples_insiders_only() -> dict:
         "Filter by source, CPV, date range, geography or contracting authority. "
         "Only available for the 'place' corpus — see GET /corpora/place/capabilities."
     ),
-    responses=error_responses(
-        NotFoundException, ValidationException, SolrException,
-        NotFoundException="Corpus 'place' not indexed",
-    ),
+    responses={
+        **_indicator_response_example({
+            "id": "total_procurement",
+            "bimester_labels": ["Ene–Feb 2025", "Mar–Abr 2025"],
+            "by_count": [142, 310],
+            "by_budget": [120000000.0, 340000000.0],
+            "total_tenders": 452,
+            "total_budget": 460000000.0,
+        }),
+        **error_responses(
+            NotFoundException, ValidationException, SolrException,
+            NotFoundException="Corpus 'place' not indexed",
+        ),
+    },
     openapi_extra=_indicator_examples(),
 )
 async def calculate_indicator_total_procurement(
@@ -974,10 +1038,19 @@ async def calculate_indicator_total_procurement(
         "Filter by source, CPV, date range, geography or contracting authority. "
         "Only available for the 'place' corpus — see GET /corpora/place/capabilities."
     ),
-    responses=error_responses(
-        NotFoundException, ValidationException, SolrException,
-        NotFoundException="Corpus 'place' not indexed",
-    ),
+    responses={
+        **_indicator_response_example({
+            "id": "single_bidder",
+            "bimester_labels": ["Ene–Feb 2025", "Mar–Abr 2025"],
+            "pct_single_bid": [23.5, 19.8],
+            "coverage": [98.2, 97.5],
+            "n_lots_total": [420, 512],
+        }),
+        **error_responses(
+            NotFoundException, ValidationException, SolrException,
+            NotFoundException="Corpus 'place' not indexed",
+        ),
+    },
     openapi_extra=_indicator_examples(),
 )
 async def calculate_indicator_single_bidder(
@@ -1019,10 +1092,19 @@ async def calculate_indicator_single_bidder(
         "Filter by source, CPV, date range, geography or contracting authority. "
         "Only available for the 'place' corpus — see GET /corpora/place/capabilities."
     ),
-    responses=error_responses(
-        NotFoundException, ValidationException, SolrException,
-        NotFoundException="Corpus 'place' not indexed",
-    ),
+    responses={
+        **_indicator_response_example({
+            "id": "decision_speed",
+            "bimester_labels": ["Ene–Feb 2025", "Mar–Abr 2025"],
+            "avg_days": [34.2, 29.7],
+            "coverage": [88.1, 90.4],
+            "n_obs": [310, 289],
+        }),
+        **error_responses(
+            NotFoundException, ValidationException, SolrException,
+            NotFoundException="Corpus 'place' not indexed",
+        ),
+    },
     openapi_extra=_indicator_examples_insiders_only(),
 )
 async def calculate_indicator_decision_speed(
@@ -1066,10 +1148,19 @@ async def calculate_indicator_decision_speed(
         "Filter by source, CPV, date range, geography or contracting authority. "
         "Only available for the 'place' corpus — see GET /corpora/place/capabilities."
     ),
-    responses=error_responses(
-        NotFoundException, ValidationException, SolrException,
-        NotFoundException="Corpus 'place' not indexed",
-    ),
+    responses={
+        **_indicator_response_example({
+            "id": "direct_awards",
+            "bimester_labels": ["Ene–Feb 2025", "Mar–Abr 2025"],
+            "pct_direct": [12.3, 15.1],
+            "coverage": [95.0, 96.2],
+            "n_tenders": [142, 310],
+        }),
+        **error_responses(
+            NotFoundException, ValidationException, SolrException,
+            NotFoundException="Corpus 'place' not indexed",
+        ),
+    },
     openapi_extra=_indicator_examples(),
 )
 async def calculate_indicator_direct_awards(
@@ -1111,10 +1202,18 @@ async def calculate_indicator_direct_awards(
         "Filter by source, CPV, date range, geography or contracting authority. "
         "Only available for the 'place' corpus — see GET /corpora/place/capabilities."
     ),
-    responses=error_responses(
-        NotFoundException, ValidationException, SolrException,
-        NotFoundException="Corpus 'place' not indexed",
-    ),
+    responses={
+        **_indicator_response_example({
+            "id": "ted_publication",
+            "bimester_labels": ["Ene–Feb 2025", "Mar–Abr 2025"],
+            "pct_ted": [8.4, 11.2],
+            "n_tenders": [142, 310],
+        }),
+        **error_responses(
+            NotFoundException, ValidationException, SolrException,
+            NotFoundException="Corpus 'place' not indexed",
+        ),
+    },
     openapi_extra=_indicator_examples(),
 )
 async def calculate_indicator_ted_publication(
@@ -1157,10 +1256,19 @@ async def calculate_indicator_ted_publication(
         "Filter by source, CPV, date range, geography or contracting authority. "
         "Only available for the 'place' corpus — see GET /corpora/place/capabilities."
     ),
-    responses=error_responses(
-        NotFoundException, ValidationException, SolrException,
-        NotFoundException="Corpus 'place' not indexed",
-    ),
+    responses={
+        **_indicator_response_example({
+            "id": "sme_participation",
+            "bimester_labels": ["Ene–Feb 2025", "Mar–Abr 2025"],
+            "pct_sme": [61.3, 58.9],
+            "coverage": [93.4, 94.1],
+            "n_lots_total": [420, 512],
+        }),
+        **error_responses(
+            NotFoundException, ValidationException, SolrException,
+            NotFoundException="Corpus 'place' not indexed",
+        ),
+    },
     openapi_extra=_indicator_examples_insiders_only(),
 )
 async def calculate_indicator_sme_participation(
@@ -1204,10 +1312,19 @@ async def calculate_indicator_sme_participation(
         "Filter by source, CPV, date range, geography or contracting authority. "
         "Only available for the 'place' corpus — see GET /corpora/place/capabilities."
     ),
-    responses=error_responses(
-        NotFoundException, ValidationException, SolrException,
-        NotFoundException="Corpus 'place' not indexed",
-    ),
+    responses={
+        **_indicator_response_example({
+            "id": "sme_offer_ratio",
+            "bimester_labels": ["Ene–Feb 2025", "Mar–Abr 2025"],
+            "pct_sme_offers": [44.7, 41.2],
+            "coverage": [90.1, 91.8],
+            "n_lots_total": [420, 512],
+        }),
+        **error_responses(
+            NotFoundException, ValidationException, SolrException,
+            NotFoundException="Corpus 'place' not indexed",
+        ),
+    },
     openapi_extra=_indicator_examples_insiders_only(),
 )
 async def calculate_indicator_sme_offer_ratio(
@@ -1251,10 +1368,19 @@ async def calculate_indicator_sme_offer_ratio(
         "Filter by source, CPV, date range, geography or contracting authority. "
         "Only available for the 'place' corpus — see GET /corpora/place/capabilities."
     ),
-    responses=error_responses(
-        NotFoundException, ValidationException, SolrException,
-        NotFoundException="Corpus 'place' not indexed",
-    ),
+    responses={
+        **_indicator_response_example({
+            "id": "lots_division",
+            "bimester_labels": ["Ene–Feb 2025", "Mar–Abr 2025"],
+            "pct_multi_lot": [18.9, 21.4],
+            "coverage": [100.0, 100.0],
+            "n_tenders": [142, 310],
+        }),
+        **error_responses(
+            NotFoundException, ValidationException, SolrException,
+            NotFoundException="Corpus 'place' not indexed",
+        ),
+    },
     openapi_extra=_indicator_examples(),
 )
 async def calculate_indicator_lots_division(
@@ -1297,10 +1423,19 @@ async def calculate_indicator_lots_division(
         "Filter by source, CPV, date range, geography or contracting authority. "
         "Only available for the 'place' corpus — see GET /corpora/place/capabilities."
     ),
-    responses=error_responses(
-        NotFoundException, ValidationException, SolrException,
-        NotFoundException="Corpus 'place' not indexed",
-    ),
+    responses={
+        **_indicator_response_example({
+            "id": "missing_supplier_id",
+            "bimester_labels": ["Ene–Feb 2025", "Mar–Abr 2025"],
+            "pct_missing": [3.2, 2.7],
+            "coverage": [100.0, 100.0],
+            "n_lots_total": [420, 512],
+        }),
+        **error_responses(
+            NotFoundException, ValidationException, SolrException,
+            NotFoundException="Corpus 'place' not indexed",
+        ),
+    },
     openapi_extra=_indicator_examples(),
 )
 async def calculate_indicator_missing_supplier_id(
@@ -1343,10 +1478,19 @@ async def calculate_indicator_missing_supplier_id(
         "Filter by source, CPV, date range, geography or contracting authority. "
         "Only available for the 'place' corpus — see GET /corpora/place/capabilities."
     ),
-    responses=error_responses(
-        NotFoundException, ValidationException, SolrException,
-        NotFoundException="Corpus 'place' not indexed",
-    ),
+    responses={
+        **_indicator_response_example({
+            "id": "missing_buyer_id",
+            "bimester_labels": ["Ene–Feb 2025", "Mar–Abr 2025"],
+            "pct_missing": [1.8, 2.3],
+            "coverage": [98.2, 97.7],
+            "n_tenders": [142, 310],
+        }),
+        **error_responses(
+            NotFoundException, ValidationException, SolrException,
+            NotFoundException="Corpus 'place' not indexed",
+        ),
+    },
     openapi_extra=_indicator_examples(),
 )
 async def calculate_indicator_missing_buyer_id(

@@ -53,7 +53,7 @@ date_field=updated
 MetadataDisplayed=id,title,link,expediente,generative_objective
 SearcheableField=id,title
 embedding_text_fields=generative_objective,objeto
-capabilities=metadata,semantic_by_text,semantic_by_document,indicators
+capabilities=metadata,semantic_by_text,semantic_by_document,indicators,cpv_filter
 secondary_id_fields=expediente
 
 [bdns-config]

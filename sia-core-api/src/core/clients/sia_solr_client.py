@@ -996,7 +996,7 @@ class SIASolrClient(SolrClient):
         corpus_col = corpus_col.lower()
 
         if not self.check_is_corpus(corpus_col):
-            return
+            return None, 400
 
         _exclude = {'doc_hash', '_version_', 'SearcheableField', 'SearcheableField_str'}
         url = f'{self.solr_url}/solr/{corpus_col}/admin/luke'
@@ -1005,7 +1005,7 @@ class SIASolrClient(SolrClient):
         if resp.status_code != 200:
             self.logger.error(
                 f"-- -- Error retrieving Luke fields for {corpus_col}.")
-            return
+            return None, resp.status_code
 
         fields = sorted(
             name
@@ -1183,7 +1183,7 @@ class SIASolrClient(SolrClient):
 
         # 1. Check that corpus_col is indeed a corpus collection
         if not self.check_is_corpus(corpus_col):
-            return
+            return None, 400
 
         # 2. Execute query
         if secondary_field is not None:
@@ -1207,7 +1207,7 @@ class SIASolrClient(SolrClient):
         if sc != 200:
             self.logger.error(
                 f"-- -- Error executing query Q6. Aborting operation...")
-            return
+            return None, sc
 
         _exclude = {'doc_hash', '_version_', 'SearcheableField'}
         docs = [{k: v for k, v in doc.items() if k not in _exclude}

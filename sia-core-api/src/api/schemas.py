@@ -39,6 +39,7 @@ class CorpusCapability(str, Enum):
     SEMANTIC_BY_TEXT = "semantic_by_text"
     SEMANTIC_BY_DOCUMENT = "semantic_by_document"
     INDICATORS = "indicators"
+    CPV_FILTER = "cpv_filter"
 
 
 # ══════════════════════════════════════════════════════
@@ -294,8 +295,9 @@ class MetadataFilter(BaseModel):
     key-value metadata.
 
     Field mapping to Solr:
-    - ``date``  : ``updated`` (supports year, exact timestamp, or range)
-    - ``cpv``   : ``cpv_list`` (string, multivalued; prefix or exact code)
+    - ``date``  : ``date`` (canonical, corpus-agnostic; supports year, exact timestamp, or range)
+    - ``cpv``   : ``cpv_list`` (string, multivalued; prefix or exact code — only
+      corpora with the 'cpv_filter' capability, e.g. 'place', have this field)
     - ``extra`` : arbitrary indexed field names and their values (e.g., {"estado": "ADJ", "tender_type": "insiders"})
     """
     date: Optional[str] = Field(

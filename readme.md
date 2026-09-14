@@ -142,13 +142,6 @@ chmod 600 ./sia-config/api_keys.json 2>/dev/null || true
 
 The `SIA_DATA_DIR` / `SIA_BDNS_DATA_DIR` directories from step 1 are external to this repo and usually managed separately — just confirm the `APP_UID:APP_GID` user can read them (e.g. `stat <path>`); don't `chown` them as part of this deployment unless you also own that data.
 
-> **macOS / Docker Desktop note**: if a bind-mounted dir was previously owned by a
-> container's built-in UID (e.g. an old deployment that ran Solr as UID 8983), Docker
-> Desktop's virtiofs bridge can leave it in a state where even a matching UID can't
-> write to it. If you hit `Permission denied` on a directory that already looks
-> correctly owned, `rm -rf` and `mkdir` it again as your own user rather than trying
-> to `chmod` it in place.
-
 ### 4. Initialize Solr storage and config (one-time)
 
 ```
@@ -372,15 +365,16 @@ curl -X 'GET' \
   "message": null,
   "data": {
     "corpus": "place",
-    "capabilities": ["indicators", "metadata", "semantic_by_document", "semantic_by_text"],
+    "capabilities": ["cpv_filter", "indicators", "metadata", "semantic_by_document", "semantic_by_text"],
     "secondary_id_fields": ["expediente"]
   }
 }
 ```
 
 The same call for `bdns` returns `"capabilities": ["metadata", "semantic_by_document", "semantic_by_text"]`
-(no `indicators`, since indicators rely on procurement-specific fields — budget,
-CPV, award data — that BDNS grants don't have) and `"secondary_id_fields": ["codigo_bdns"]`.
+(no `indicators` or `cpv_filter`, since both rely on procurement-specific fields
+— budget, CPV, award data — that BDNS grants don't have) and
+`"secondary_id_fields": ["codigo_bdns"]`.
 `secondary_id_fields` lists the alternate identifier(s) — besides the canonical
 `id` — that a document can be looked up by in that corpus; none are hardcoded
 in the API, they're declared per corpus in `sia-config/config.cf`
@@ -417,7 +411,15 @@ curl -X 'GET' \
 
 Same request shape for both collections — only `corpus_collection` and the
 filters that make sense for that domain (CPV/procurement vs. grant-specific
-metadata) change.
+metadata) change. `filters.date` always maps to the canonical `date` field
+(populated for every corpus); `filters.cpv` only works for corpora that
+declare the `cpv_filter` capability (currently just `place` — see
+[Discover what a corpus supports](#discover-what-a-corpus-supports)). Passing
+`cpv` against a corpus that doesn't support it returns a 400
+(`"Corpus 'bdns' does not support 'cpv_filter'"`) instead of silently empty
+results. `filters.extra` values are matched as an exact phrase (quoted
+internally), so multi-word values like `"MINISTERIO DE CULTURA"` work as
+expected — case-sensitive, matching the value exactly as indexed.
 
 **PLACE example** (procurement):
 
@@ -429,7 +431,7 @@ curl -X 'POST' \
   -H 'Content-Type: application/json' \
   -d '{
   "query_text": "inteligencia artificial en contratacion publica",
-  "filters": {"date": "2025", "cpv": "72*"},
+  "filters": {"date": "2025", "cpv": "72*", "extra": {"tender_type": "insiders"}},
   "pagination": {"start": 0, "rows": 10}
 }'
 ```
@@ -443,8 +445,8 @@ curl -X 'POST' \
   -H 'X-API-Key: <your-api-key>' \
   -H 'Content-Type: application/json' \
   -d '{
-  "query_text": "ayudas para la transicion energetica en pymes",
-  "filters": {"date": "2025", "extra": {"organo_entidad": "Industria y Energía"}},
+  "query_text": "subvenciones para la edicion de libros",
+  "filters": {"date": "2025", "extra": {"organo_entidad": "MINISTERIO DE CULTURA"}},
   "pagination": {"start": 0, "rows": 10}
 }'
 ```
@@ -473,7 +475,7 @@ curl -X 'POST' \
   -H 'Content-Type: application/json' \
   -d '{
   "doc_ids": ["<place_doc_id>"],
-  "filters": {"date": "2025"},
+  "filters": {"date": "2025", "cpv": "72*"},
   "pagination": {"start": 0, "rows": 10}
 }'
 ```
@@ -502,7 +504,7 @@ curl -X 'POST' \
   -H 'X-API-Key: <your-api-key>' \
   -H 'Content-Type: application/json' \
   -d '{
-  "doc_ids": ["<bdns_doc_id>"],
+  "doc_ids": ["bdns:806695", "bdns:867440"],
   "filters": {"date": "2025"},
   "pagination": {"start": 0, "rows": 10}
 }'
@@ -517,7 +519,7 @@ curl -X 'POST' \
   -H 'X-API-Key: <your-api-key>' \
   -H 'Content-Type: application/json' \
   -d '{
-  "secondary_ids": {"codigo_bdns": ["<codigo_bdns_value>"]},
+  "secondary_ids": {"codigo_bdns": ["806695", "867440"]},
   "filters": {"date": "2025"},
   "pagination": {"start": 0, "rows": 10}
 }'
