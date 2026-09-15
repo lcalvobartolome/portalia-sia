@@ -1863,7 +1863,7 @@ class SIASolrClient(SolrClient):
 
         if aggregation == "centroid":
             return self._q21_by_centroid(
-                corpus_col, embeddings, start, rows, filter_query, keyword, query_fields
+                corpus_col, embeddings, doc_ids, start, rows, filter_query, keyword, query_fields
             )
         elif aggregation == "rrf":
             return self._q21_by_rrf(
@@ -1936,16 +1936,18 @@ class SIASolrClient(SolrClient):
         return computed
 
     def _q21_by_centroid(
-        self, corpus_col, embeddings, start, rows, filter_query, keyword, query_fields
+        self, corpus_col, embeddings, doc_ids, start, rows, filter_query, keyword, query_fields
     ):
         """Aggregates embeddings as a centroid and performs a single search."""
 
         vectors = list(embeddings.values())
         centroid = np.mean(vectors, axis=0).tolist()
 
-        # Reuse the logic of do_Q21 directly with the centroid
+        # Reuse the logic of do_Q21 directly with the centroid, excluding the
+        # reference documents themselves from their own "similar" results.
         return self._execute_vector_query(
-            corpus_col, centroid, start, rows, filter_query, keyword, query_fields
+            corpus_col, centroid, start, rows, filter_query, keyword, query_fields,
+            exclude_ids=doc_ids,
         )
 
 
@@ -1971,16 +1973,14 @@ class SIASolrClient(SolrClient):
 
         for _, emb in embeddings.items():
             result_docs, _, sc = self._execute_vector_query(
-                corpus_col, emb, 0, fetch_rows, filter_query, keyword, query_fields
+                corpus_col, emb, 0, fetch_rows, filter_query, keyword, query_fields,
+                exclude_ids=doc_ids,
             )
             if sc != 200 or not result_docs:
                 continue
 
             for rank, doc in enumerate(result_docs):
                 rid = doc["id"]
-                # Exclude the reference documents themselves
-                if rid in doc_ids:
-                    continue
                 docs_cache[rid] = doc
                 scores[rid] = scores.get(rid, 0.0) + 1.0 / (RRF_K + rank + 1)
 
@@ -1993,7 +1993,7 @@ class SIASolrClient(SolrClient):
 
 
     def _execute_vector_query(
-        self, corpus_col, emb, start, rows, filter_query, keyword, query_fields
+        self, corpus_col, emb, start, rows, filter_query, keyword, query_fields, exclude_ids=None
     ):
         """Helper that reproduces the core of do_Q21 given an already calculated embedding."""
         start, rows = self.custom_start_and_rows(start, rows, corpus_col)
@@ -2012,6 +2012,10 @@ class SIASolrClient(SolrClient):
         if filter_query:
             existing_fq = params.get('fq')
             params['fq'] = f"({existing_fq}) AND ({filter_query})" if existing_fq else filter_query
+        if exclude_ids:
+            exclude_fq = "-(" + " OR ".join(f'id:"{doc_id}"' for doc_id in exclude_ids) + ")"
+            existing_fq = params.get('fq')
+            params['fq'] = f"({existing_fq}) AND {exclude_fq}" if existing_fq else exclude_fq
 
         sc, results = self.execute_query(q=q_obj['q'], col_name=corpus_col, **params)
         if sc != 200:
