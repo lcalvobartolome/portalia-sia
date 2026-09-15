@@ -322,7 +322,7 @@ class Queries(object):
         # # Retrieve documents that are semantically similar to a given free text using BERT embeddings. The free text is represented by its BERT embeddings, and these embeddings for the documents in the collection are precalculated and indexed into Solr for efficient retrieval.
         # ################################################################
         self.Q21 = {
-            'q': "{{!knn f=embeddings topK=100}}{}",
+            'q': "{{!knn f=embeddings topK={}}}{}",
             'fl': "id,expediente,generative_objective,link,score",
             'start': '{}',
             'rows': '{}'
@@ -330,7 +330,7 @@ class Queries(object):
         # ================================================================
         # # Q21_e: getDocsSimilarToFreeTextEmbAndBM25
         self.Q21_e = {
-            'q': "{{!knn f=embeddings topK=100}}{}",
+            'q': "{{!knn f=embeddings topK={}}}{}",
             'fq': '{{!edismax qf={}}} {}',
             'fl': 'id,expediente,generative_objective,link,score',
             'start': '{}',
@@ -721,6 +721,7 @@ class Queries(object):
         doc_embeddings: str,
         start: str,
         rows: str,
+        top_k: int,
         fl: Optional[str] = None,
     ) -> dict:
         """Customizes query Q21 'getDocsSimilarToFreeTextEmb'
@@ -735,6 +736,12 @@ class Queries(object):
             Start value.
         rows: str
             Number of rows to retrieve.
+        top_k: int
+            topK for the underlying Solr {!knn} search — the number of
+            nearest-neighbor candidates considered before fq filtering and
+            pagination. Should be the corpus' total doc count so the search
+            (and its numFound) covers the whole corpus rather than an
+            arbitrary cap; see SiaSolrClient._get_corpus_doc_count.
         fl: str, optional
             Fields to return, overriding the corpus-agnostic template
             default. Callers should build this from the corpus' own
@@ -748,7 +755,7 @@ class Queries(object):
         """
 
         custom_q21 = {
-            'q': self.Q21['q'].format(doc_embeddings),
+            'q': self.Q21['q'].format(top_k, doc_embeddings),
             'fl': fl or self.Q21['fl'],
             'start': self.Q21['start'].format(start),
             'rows': self.Q21['rows'].format(rows),
@@ -762,6 +769,7 @@ class Queries(object):
         start: str,
         rows: str,
         query_fields: str,
+        top_k: int,
         fl: Optional[str] = None,
     ) -> dict:
         """Customizes query Q21_e 'getDocsSimilarToFreeTextEmbAndBM25'
@@ -776,6 +784,8 @@ class Queries(object):
             Start value.
         rows: str
             Number of rows to retrieve.
+        top_k: int
+            topK for the underlying Solr {!knn} search (see `customize_Q21`).
         fl: str, optional
             Fields to return, overriding the corpus-agnostic template
             default (see `customize_Q21`).
@@ -787,7 +797,7 @@ class Queries(object):
         """
 
         custom_q21_e = {
-            'q': self.Q21_e['q'].format(doc_embeddings),
+            'q': self.Q21_e['q'].format(top_k, doc_embeddings),
             'fq': self.Q21_e['fq'].format(query_fields, keyword),
             'fl': fl or self.Q21_e['fl'],
             'start': self.Q21_e['start'].format(start),

@@ -221,6 +221,7 @@ class DataResponse(ResponseBase):
     topic distributions, counts, year lists, etc.).
     """
     data: Any = None
+    total_elements: Optional[int] = None
 
     class Config:
         json_schema_extra = {
@@ -232,6 +233,7 @@ class DataResponse(ResponseBase):
                     "title": "Suministro de equipos informáticos",
                     "score": 0.95,
                 }],
+                "total_elements": 1,
             }
         }
 

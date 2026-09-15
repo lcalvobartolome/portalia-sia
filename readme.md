@@ -67,12 +67,7 @@ CORS_ORIGINS=http://<host>:3000,https://your-frontend.com
 # GitHub token to clone private pipeline repository during Docker build
 GITHUB_TOKEN=your-github-token-here
 
-# UID/GID that sia-core-api AND solr run as. Both containers run as this
-# user instead of a fixed built-in one, so every bind-mounted host dir
-# (./sia-config, ./db/data/sqlite3, ./db/data/solr) just needs to be owned by
-# whoever creates it — no `chown`/`sudo` step is ever required, on Mac or
-# Linux. Also used to read the external corpus data dirs set below
-# (SIA_DATA_DIR, SIA_BDNS_DATA_DIR), mounted at /mnt/data_place and /mnt/data_bdns.
+# UID/GID that sia-core-api AND solr run as. Both containers run as this user, so every bind-mounted host dir (./sia-config, ./db/data/sqlite3, ./db/data/solr) just needs to be owned by whoever creates it. Also used to read the external corpus data dirs set below (SIA_DATA_DIR, SIA_BDNS_DATA_DIR), mounted at /mnt/data_place and /mnt/data_bdns.
 # Set these to the output of `id -u` / `id -g` and rebuild the image.
 APP_UID=1000
 APP_GID=1000
@@ -82,9 +77,7 @@ APP_GID=1000
 # PIPELINE_REF=<full-commit-sha>
 
 # Host paths for the corpus data mounted into sia-core-api
-# Must be absolute, or start with "./" if relative — a bare "data/place" is
-# parsed by Compose as a *named volume* reference (not a bind-mount path) and
-# fails with "refers to undefined volume".
+# Must be absolute, or start with "./" if relative
 SIA_DATA_DIR=/path/to/place/data
 SIA_BDNS_DATA_DIR=/path/to/bdns/data
 ```
@@ -149,7 +142,7 @@ The `SIA_DATA_DIR` / `SIA_BDNS_DATA_DIR` directories from step 1 are external to
 #    and owned by you in step 3 — no extra chown needed)
 docker compose up -d zoo solr
 
-# 2) Upload the `sia_config` configset to Zookeeper.
+# 2) Upload the sia_config configset to Zookeeper.
 docker compose exec solr bin/solr zk upconfig \
   -z zoo:2181 -n sia_config \
   -d /opt/solr/server/solr/configsets/sia_config

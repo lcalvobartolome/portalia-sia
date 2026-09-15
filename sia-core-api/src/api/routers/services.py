@@ -615,7 +615,7 @@ async def semantic_search_by_text(
         _require_capability(sc, corpus_collection, CorpusCapability.SEMANTIC_BY_TEXT)
         if body.filters is not None and body.filters.cpv is not None:
             _require_capability(sc, corpus_collection, CorpusCapability.CPV_FILTER)
-        result, status = sc.do_Q21(
+        result, total, status = sc.do_Q21(
             corpus_col=corpus_collection,
             search_doc=body.query_text,
             filter_query=_build_filter_query(body.filters),
@@ -625,7 +625,7 @@ async def semantic_search_by_text(
         if status != 200:
             logger.error("Solr semantic-by-text query failed (status=%s)", status)
             raise SolrException("Solr query failed")
-        return DataResponse(success=True, data=result)
+        return DataResponse(success=True, data=result, total_elements=total)
     except APIException:
         raise
     except Exception as e:
@@ -720,7 +720,7 @@ async def similar_documents_by_id(
         if not doc_ids:
             raise NotFoundException("No documents found for the provided IDs or secondary_ids")
 
-        result, status = sc.do_Q21_by_doc(
+        result, total, status = sc.do_Q21_by_doc(
             corpus_col=corpus_collection,
             doc_ids=doc_ids,
             filter_query=_build_filter_query(body.filters),
@@ -730,7 +730,7 @@ async def similar_documents_by_id(
         if status != 200:
             logger.error("Solr semantic-by-document query failed (status=%s)", status)
             raise SolrException("Solr query failed")
-        return DataResponse(success=True, data=result)
+        return DataResponse(success=True, data=result, total_elements=total)
     except APIException:
         raise
     except Exception as e:

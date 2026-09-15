@@ -185,7 +185,7 @@ async def execute_raw_query(
         return SolrQueryResponse(
             success=True,
             data=results.docs,
-            num_found=getattr(results, 'num_found', len(results.docs))
+            num_found=results.hits
         )
     except APIException:
         raise

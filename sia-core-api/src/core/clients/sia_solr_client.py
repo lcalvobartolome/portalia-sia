@@ -861,6 +861,26 @@ class SIASolrClient(SolrClient):
         self.logger.info(f"-- -- Start: {start}, Rows: {rows} from custom_start_and_rows")
         return start, rows
 
+    def _get_corpus_doc_count(self, corpus_col: str) -> int:
+        """Returns the total number of indexed documents in corpus_col.
+
+        Used as the topK for vector (kNN) search: Solr's DenseVectorField
+        query parser requires an explicit topK, and Solr 9.1 applies fq
+        filters *after* the topK candidate set is chosen — so a small fixed
+        topK silently caps results (and numFound) regardless of `rows` or
+        filters. Setting topK to the full doc count makes the kNN search
+        consider the entire corpus. Falls back to a safe default if the
+        count query itself fails.
+        """
+        sc, results = self.execute_query(q='*:*', col_name=corpus_col, rows=0)
+        if sc == 200:
+            return max(int(results.hits), 1)
+        self.logger.warning(
+            f"-- -- Could not determine doc count for corpus {corpus_col}; "
+            f"falling back to topK=100 for vector search."
+        )
+        return 100
+
     # ======================================================
     # QUERIES
     # ======================================================
@@ -1744,7 +1764,7 @@ class SIASolrClient(SolrClient):
         
         # 1. Check that corpus_col is indeed a corpus collection
         if not self.check_is_corpus(corpus_col):
-            return None, 400
+            return None, None, 400
 
         # 3. Get embedding from search_doc
         embs = self.sia_tools.get_embedding(search_doc)
@@ -1752,14 +1772,15 @@ class SIASolrClient(SolrClient):
         if embs is None:
             self.logger.error(
                 f"-- -- Error attaining embeddings from {search_doc} while executing query Q21. Aborting operation...")
-            return None, 500
+            return None, None, 500
 
         self.logger.info(
             f"-- -- Embbedings for doc {search_doc} attained.")
          
         # 4. Customize start and rows
         start, rows = self.custom_start_and_rows(start, rows, corpus_col)
-        
+        top_k = self._get_corpus_doc_count(corpus_col)
+
         # 5. Calculate cosine similarity between the embedding of search_doc and the embeddings of the documents in the corpus
         fl = self._get_display_fl(corpus_col)
         if keyword is None:
@@ -1767,6 +1788,7 @@ class SIASolrClient(SolrClient):
                 doc_embeddings=embs,
                 start=start,
                 rows=rows,
+                top_k=top_k,
                 fl=fl,
             )
         else:
@@ -1776,6 +1798,7 @@ class SIASolrClient(SolrClient):
             query_fields=query_fields,
             start=start,
             rows=rows,
+            top_k=top_k,
             fl=fl,
         )
         params = {k: v for k, v in q21.items() if k != 'q'}
@@ -1793,10 +1816,10 @@ class SIASolrClient(SolrClient):
         if sc != 200:
             self.logger.error(
                 f"-- -- Error executing query Q21. Aborting operation...")
-            return None, sc
+            return None, None, sc
 
-        return results.docs, sc
-    
+        return results.docs, results.hits, sc
+
     def do_Q21_by_doc(
         self,
         corpus_col: str,
@@ -1822,7 +1845,7 @@ class SIASolrClient(SolrClient):
         corpus_col = corpus_col.lower()
 
         if not self.check_is_corpus(corpus_col):
-            return None, 400
+            return None, None, 400
 
         # 1. Retrieve embeddings directly from Solr (already indexed)
         embeddings = self._fetch_embeddings_from_solr(corpus_col, doc_ids)
@@ -1836,7 +1859,7 @@ class SIASolrClient(SolrClient):
 
         if not embeddings:
             self.logger.error(f"-- -- Could not retrieve embeddings for doc_ids: {doc_ids}")
-            return None, 500
+            return None, None, 500
 
         if aggregation == "centroid":
             return self._q21_by_centroid(
@@ -1932,6 +1955,12 @@ class SIASolrClient(SolrClient):
         """
         Looks for documents similar to each reference document individually and merges results using RRF.
         RRF score: sum(1 / (k + rank_i))  — k=60 is the standard value.
+
+        The returned total_elements is the number of unique candidates found across
+        the per-reference-document queries (len(ranked)), not a true Solr numFound:
+        each query is capped at fetch_rows results, so this is an upper bound on the
+        candidate set actually paginated, not the true count of semantically similar
+        documents in the corpus.
         """
         RRF_K = 60
         scores: dict[str, float] = {}
@@ -1941,7 +1970,7 @@ class SIASolrClient(SolrClient):
         fetch_rows = min(rows * 3, 100)
 
         for _, emb in embeddings.items():
-            result_docs, sc = self._execute_vector_query(
+            result_docs, _, sc = self._execute_vector_query(
                 corpus_col, emb, 0, fetch_rows, filter_query, keyword, query_fields
             )
             if sc != 200 or not result_docs:
@@ -1960,7 +1989,7 @@ class SIASolrClient(SolrClient):
         paginated = ranked[start: start + rows]
 
         merged_docs = [docs_cache[rid] for rid, _ in paginated]
-        return merged_docs, 200
+        return merged_docs, len(ranked), 200
 
 
     def _execute_vector_query(
@@ -1968,14 +1997,15 @@ class SIASolrClient(SolrClient):
     ):
         """Helper that reproduces the core of do_Q21 given an already calculated embedding."""
         start, rows = self.custom_start_and_rows(start, rows, corpus_col)
+        top_k = self._get_corpus_doc_count(corpus_col)
 
         fl = self._get_display_fl(corpus_col)
         if keyword is None:
-            q_obj = self.querier.customize_Q21(doc_embeddings=emb, start=start, rows=rows, fl=fl)
+            q_obj = self.querier.customize_Q21(doc_embeddings=emb, start=start, rows=rows, top_k=top_k, fl=fl)
         else:
             q_obj = self.querier.customize_Q21_e(
                 doc_embeddings=emb, keyword=keyword,
-                query_fields=query_fields, start=start, rows=rows, fl=fl
+                query_fields=query_fields, start=start, rows=rows, top_k=top_k, fl=fl
             )
 
         params = {k: v for k, v in q_obj.items() if k != 'q'}
@@ -1985,8 +2015,8 @@ class SIASolrClient(SolrClient):
 
         sc, results = self.execute_query(q=q_obj['q'], col_name=corpus_col, **params)
         if sc != 200:
-            return None, sc
-        return results.docs, sc
+            return None, None, sc
+        return results.docs, results.hits, sc
     
     def do_Q22( # this is not a predefined query, but a wrapper over the inferencer that gets the information for the predicted topic
         self,
